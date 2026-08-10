@@ -4,7 +4,7 @@ import com.jobservice.dto.request.LoginRequest;
 import com.jobservice.dto.request.RegisterRequest;
 import com.jobservice.dto.response.AuthResponse;
 import com.jobservice.dto.response.MessageResponse;
-import com.jobservice.service.AuthService;
+import com.jobservice.service.interfaces.AuthServiceInterface;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,9 +17,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/auth")
 public class AuthController {
 
-    private final AuthService authService;
+    private final AuthServiceInterface authService;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthServiceInterface authService) {
         this.authService = authService;
     }
 

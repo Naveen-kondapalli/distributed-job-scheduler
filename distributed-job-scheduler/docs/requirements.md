@@ -7,9 +7,9 @@
 ### Job Management
 - Users can create a job.
 - Users can schedule a job:
-    - Immediate execution
-    - Future execution
-    - Cron-based recurring execution
+  - Immediate execution
+  - Future execution
+  - Cron-based recurring execution
 - Users can update a scheduled job.
 - Users can cancel a scheduled job.
 - Users can pause a scheduled job.
