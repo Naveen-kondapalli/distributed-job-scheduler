@@ -8,9 +8,13 @@ import com.jobservice.entity.User;
 import com.jobservice.exception.ConflictException;
 import com.jobservice.exception.ErrorCode;
 import com.jobservice.exception.InvalidCredentialsException;
+import com.jobservice.mapper.UserMapper;
 import com.jobservice.repository.UserRepository;
 import com.jobservice.security.JwtService;
+import com.jobservice.service.interfaces.AuthServiceInterface;
 import java.util.Locale;
+
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -23,7 +27,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-public class AuthService {
+@RequiredArgsConstructor
+public class AuthService implements AuthServiceInterface {
 
     private static final String REGISTRATION_SUCCESS_MESSAGE = "User registered successfully";
 
@@ -31,19 +36,9 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
+    private final UserMapper userMapper;
 
-    public AuthService(
-            UserRepository userRepository,
-            PasswordEncoder passwordEncoder,
-            AuthenticationManager authenticationManager,
-            JwtService jwtService
-    ) {
-        this.userRepository = userRepository;
-        this.passwordEncoder = passwordEncoder;
-        this.authenticationManager = authenticationManager;
-        this.jwtService = jwtService;
-    }
-
+    @Override
     @Transactional
     public MessageResponse register(RegisterRequest request) {
         String username = request.username().trim();
@@ -62,10 +57,12 @@ public class AuthService {
             );
         }
 
-        User user = new User();
-        user.setUsername(username);
-        user.setEmail(email);
-        user.setPassword(passwordEncoder.encode(request.password()));
+        User user = userMapper.toEntity(
+                request,
+                username,
+                email,
+                passwordEncoder.encode(request.password())
+        );
 
         try {
             userRepository.save(user);
@@ -79,6 +76,7 @@ public class AuthService {
         return new MessageResponse(REGISTRATION_SUCCESS_MESSAGE);
     }
 
+    @Override
     public AuthResponse login(LoginRequest request) {
         String email = normalizeEmail(request.email());
         try {
