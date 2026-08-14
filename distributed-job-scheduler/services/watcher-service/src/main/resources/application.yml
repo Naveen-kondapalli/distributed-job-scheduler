@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: watcher-service
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/job_scheduler}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          time_zone: Asia/Kolkata
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+server:
+  port: ${SERVER_PORT:8081}
+
+logging:
+  level:
+    root: INFO
+
+watcher:
+  polling:
+    interval-ms: ${WATCHER_POLLING_INTERVAL_MS:1000}
+    batch-size: ${WATCHER_POLLING_BATCH_SIZE:100}
