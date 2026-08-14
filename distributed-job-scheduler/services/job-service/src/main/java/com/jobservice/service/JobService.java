@@ -16,10 +16,12 @@ import com.jobservice.mapper.JobMapper;
 import com.jobservice.repository.JobRepository;
 import com.jobservice.repository.UserRepository;
 import com.jobservice.service.interfaces.JobServiceInterface;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -35,6 +37,7 @@ public class JobService implements JobServiceInterface {
     private final JobRepository jobRepository;
     private final UserRepository userRepository;
     private final JobMapper jobMapper;
+    private final Clock clock;
 
     @Override
     @Transactional
@@ -48,6 +51,7 @@ public class JobService implements JobServiceInterface {
         job.setUser(user);
         job.setStatus(JobStatus.ACTIVE);
         job.setMaxRetries(request.maxRetries() == null ? DEFAULT_MAX_RETRIES : request.maxRetries());
+        job.setNextRunAt(calculateNextRunAt(job.getScheduleType(), job.getScheduledTime(), job.getCronExpression()));
 
         return jobMapper.toResponse(jobRepository.save(job));
     }
@@ -73,6 +77,7 @@ public class JobService implements JobServiceInterface {
 
         applyUpdate(request, job);
         job.setMaxRetries(request.maxRetries() == null ? DEFAULT_MAX_RETRIES : request.maxRetries());
+        job.setNextRunAt(calculateNextRunAt(job.getScheduleType(), job.getScheduledTime(), job.getCronExpression()));
 
         return jobMapper.toResponse(job);
     }
@@ -81,7 +86,19 @@ public class JobService implements JobServiceInterface {
     @Transactional
     public void deleteJob(Long jobId, Long userId) {
         Job job = findOwnedJob(jobId, userId);
+        job.setNextRunAt(null);
         jobRepository.delete(job);
+    }
+
+    @Override
+    @Transactional
+    public JobStatusResponse cancelJob(Long jobId, Long userId) {
+        Job job = findOwnedJob(jobId, userId);
+        job.setStatus(JobStatus.CANCELLED);
+        job.setNextRunAt(null);
+        // Job cancellation prevents future scheduling only. Already queued or running
+        // JobRuns are handled by the execution pipeline in a later phase.
+        return new JobStatusResponse(job.getId(), job.getStatus());
     }
 
     @Override
@@ -101,6 +118,9 @@ public class JobService implements JobServiceInterface {
         Job job = findOwnedJob(jobId, userId);
         ensureModifiable(job);
         if (job.getStatus() == JobStatus.PAUSED) {
+            if (job.getScheduleType() == ScheduleType.CRON) {
+                job.setNextRunAt(nextCronRunAfter(job.getCronExpression(), LocalDateTime.now(clock)));
+            }
             job.setStatus(JobStatus.ACTIVE);
         }
         return new JobStatusResponse(job.getId(), job.getStatus());
@@ -146,7 +166,7 @@ public class JobService implements JobServiceInterface {
             if (scheduledTime == null) {
                 throw invalidSchedule("For FUTURE jobs, scheduledTime is required");
             }
-            if (!scheduledTime.isAfter(LocalDateTime.now())) {
+            if (!scheduledTime.isAfter(LocalDateTime.now(clock))) {
                 throw invalidSchedule("scheduledTime must be in the future");
             }
             if (StringUtils.hasText(cronExpression)) {
@@ -159,9 +179,36 @@ public class JobService implements JobServiceInterface {
             if (!StringUtils.hasText(cronExpression)) {
                 throw invalidSchedule("For CRON jobs, cronExpression is required");
             }
+            parseCronExpression(cronExpression);
             if (scheduledTime != null) {
                 throw invalidSchedule("For CRON jobs, scheduledTime must not be defined");
             }
+        }
+    }
+
+    private LocalDateTime calculateNextRunAt(ScheduleType scheduleType, LocalDateTime scheduledTime, String cronExpression) {
+        if (scheduleType == ScheduleType.FUTURE) {
+            return scheduledTime;
+        }
+        if (scheduleType == ScheduleType.CRON) {
+            return nextCronRunAfter(cronExpression, LocalDateTime.now(clock));
+        }
+        return null;
+    }
+
+    private LocalDateTime nextCronRunAfter(String cronExpression, LocalDateTime after) {
+        LocalDateTime nextRunAt = parseCronExpression(cronExpression).next(after);
+        if (nextRunAt == null) {
+            throw invalidSchedule("cronExpression does not produce a next run time");
+        }
+        return nextRunAt;
+    }
+
+    private CronExpression parseCronExpression(String cronExpression) {
+        try {
+            return CronExpression.parse(cronExpression);
+        } catch (IllegalArgumentException ex) {
+            throw invalidSchedule("Invalid cronExpression");
         }
     }
 
