@@ -13,6 +13,7 @@ public record JobResponse(
         JobType jobType,
         ScheduleType scheduleType,
         LocalDateTime scheduledTime,
+        LocalDateTime nextRunAt,
         String cronExpression,
         Map<String, Object> payload,
         JobStatus status,

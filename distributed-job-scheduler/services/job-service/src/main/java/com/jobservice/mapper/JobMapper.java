@@ -16,6 +16,7 @@ public interface JobMapper {
     @Mapping(target = "updatedAt", ignore = true)
     @Mapping(target = "user", ignore = true)
     @Mapping(target = "status", ignore = true)
+    @Mapping(target = "nextRunAt", ignore = true)
     Job toEntity(CreateJobRequest request);
 
 }
