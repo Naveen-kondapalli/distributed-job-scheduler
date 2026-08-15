@@ -73,6 +73,14 @@ public class JobController {
         return ResponseEntity.noContent().build();
     }
 
+    @PatchMapping("/{jobId}/cancel")
+    public ResponseEntity<JobStatusResponse> cancelJob(
+            @PathVariable Long jobId,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        return ResponseEntity.ok(jobService.cancelJob(jobId, principal.getId()));
+    }
+
     @PatchMapping("/{jobId}/pause")
     public ResponseEntity<JobStatusResponse> pauseJob(
             @PathVariable Long jobId,

@@ -19,6 +19,8 @@ public interface JobServiceInterface {
 
     void deleteJob(Long jobId, Long userId);
 
+    JobStatusResponse cancelJob(Long jobId, Long userId);
+
     JobStatusResponse pauseJob(Long jobId, Long userId);
 
     JobStatusResponse resumeJob(Long jobId, Long userId);

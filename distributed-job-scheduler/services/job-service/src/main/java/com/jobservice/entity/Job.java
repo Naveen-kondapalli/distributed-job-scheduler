@@ -30,7 +30,7 @@ import org.hibernate.type.SqlTypes;
         name = "jobs",
         indexes = {
                 @Index(name = "idx_jobs_user_id", columnList = "user_id"),
-                @Index(name = "idx_jobs_status_scheduled_time", columnList = "status, scheduled_time"),
+                @Index(name = "idx_jobs_status_next_run_at", columnList = "status, next_run_at"),
                 @Index(name = "idx_jobs_schedule_type", columnList = "schedule_type")
         }
 )
@@ -56,6 +56,9 @@ public class Job extends BaseEntity {
 
     @Column(name = "scheduled_time")
     private LocalDateTime scheduledTime;
+
+    @Column(name = "next_run_at")
+    private LocalDateTime nextRunAt;
 
     @Column(name = "cron_expression", length = 100)
     private String cronExpression;
