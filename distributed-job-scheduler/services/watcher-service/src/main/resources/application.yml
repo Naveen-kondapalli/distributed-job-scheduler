@@ -5,7 +5,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/job_scheduler}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    password: ${DB_PASSWORD:admin}
 
   jpa:
     hibernate:
@@ -24,6 +24,14 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      retries: 10
+      properties:
+        enable.idempotence: true
+        delivery.timeout.ms: 120000
 
 management:
   endpoints:
@@ -45,3 +53,17 @@ watcher:
   polling:
     interval-ms: ${WATCHER_POLLING_INTERVAL_MS:1000}
     batch-size: ${WATCHER_POLLING_BATCH_SIZE:100}
+
+outbox:
+  publisher:
+    interval-ms: ${OUTBOX_PUBLISH_INTERVAL_MS:500}
+    batch-size: ${OUTBOX_BATCH_SIZE:100}
+    processing-timeout-ms: ${OUTBOX_PROCESSING_TIMEOUT_MS:30000}
+    send-timeout-ms: ${OUTBOX_SEND_TIMEOUT_MS:10000}
+    max-attempts: ${OUTBOX_MAX_ATTEMPTS:10}
+    retry:
+      base-delay-ms: ${OUTBOX_RETRY_BASE_DELAY_MS:1000}
+      max-delay-ms: ${OUTBOX_RETRY_MAX_DELAY_MS:30000}
+  cleanup:
+    interval-ms: ${OUTBOX_CLEANUP_INTERVAL_MS:3600000}
+    retention-days: ${OUTBOX_CLEANUP_RETENTION_DAYS:7}

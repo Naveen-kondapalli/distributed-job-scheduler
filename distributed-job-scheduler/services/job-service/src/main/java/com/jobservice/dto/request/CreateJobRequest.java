@@ -1,5 +1,6 @@
 package com.jobservice.dto.request;
 
+
 import com.jobservice.enums.JobType;
 import com.jobservice.enums.ScheduleType;
 import jakarta.validation.constraints.Max;

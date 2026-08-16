@@ -5,7 +5,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/job_scheduler}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    password: ${DB_PASSWORD:admin}
 
   jpa:
     hibernate:
@@ -25,4 +25,3 @@ security:
     # JWT_SECRET must be supplied through an environment variable outside local development.
     secret: ${JWT_SECRET:change-this-development-secret-key-minimum-32-characters}
     expiration-ms: ${JWT_EXPIRATION_MS:3600000}
- 
