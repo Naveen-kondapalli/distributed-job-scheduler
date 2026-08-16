@@ -42,6 +42,9 @@ public class JobRun extends BaseEntity {
     @Column(name = "status", nullable = false)
     private JobRunStatus status;
 
+    @Column(name = "scheduled_at", nullable = false)
+    private LocalDateTime scheduledAt;
+
     @Column(name = "retry_count", nullable = false)
     private Integer retryCount = 0;
 
