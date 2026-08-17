@@ -114,8 +114,22 @@ Authorization: Bearer <JWT_TOKEN>
 
 ```json
 {
-  "jobId": 101,
-  "message": "Job created successfully"
+  "id": 101,
+  "name": "Daily Sales Report",
+  "description": "Runs every morning",
+  "jobType": "HTTP",
+  "scheduleType": "CRON",
+  "scheduledTime": null,
+  "nextRunAt": "2026-08-15T10:00:00",
+  "cronExpression": "0 0 10 * * *",
+  "payload": {
+    "method": "POST",
+    "url": "https://api.example.com/report"
+  },
+  "status": "ACTIVE",
+  "maxRetries": 3,
+  "createdAt": "2026-08-14T09:30:00",
+  "updatedAt": "2026-08-14T09:30:00"
 }
 ```
 
@@ -184,6 +198,27 @@ Pauses future executions.
 ```json
 {
   "message": "Job paused successfully"
+}
+```
+
+---
+
+## Cancel Job
+
+**PATCH**
+
+```
+/jobs/{jobId}/cancel
+```
+
+Stops all future scheduled occurrences while preserving the Job and its execution history. Already queued or running JobRuns are not cancelled in this phase; execution cancellation will be handled by the future execution pipeline.
+
+### Response
+
+```json
+{
+  "jobId": 101,
+  "jobStatus": "CANCELLED"
 }
 ```
 

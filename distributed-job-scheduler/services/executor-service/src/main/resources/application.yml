@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: executor-service
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/job_scheduler}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          time_zone: Asia/Kolkata
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${EXECUTOR_CONSUMER_GROUP:executor-service}
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+server:
+  port: ${SERVER_PORT:8082}
+  shutdown: graceful
+
+spring.lifecycle.timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}
+
+logging:
+  level:
+    root: INFO
+
+executor:
+  instance-id: ${EXECUTOR_INSTANCE_ID:}
+  kafka:
+    topic: ${EXECUTOR_RUN_TOPIC:run}
+    concurrency: ${EXECUTOR_KAFKA_CONCURRENCY:3}
+  http:
+    connect-timeout-ms: ${EXECUTOR_HTTP_CONNECT_TIMEOUT_MS:3000}
+    read-timeout-ms: ${EXECUTOR_HTTP_READ_TIMEOUT_MS:10000}
+    allowed-hosts: ${EXECUTOR_HTTP_ALLOWED_HOSTS:jsonplaceholder.typicode.com}
+    idempotency-key-header: ${EXECUTOR_HTTP_IDEMPOTENCY_KEY_HEADER:Idempotency-Key}
