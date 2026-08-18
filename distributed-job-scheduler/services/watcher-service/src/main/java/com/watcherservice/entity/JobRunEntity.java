@@ -54,6 +54,9 @@ public class JobRunEntity {
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
 
+    @Column(name = "next_retry_at")
+    private LocalDateTime nextRetryAt;
+
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 

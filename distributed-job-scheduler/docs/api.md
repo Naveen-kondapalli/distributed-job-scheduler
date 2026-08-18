@@ -340,10 +340,15 @@ Represents an individual execution.
 ```
 QUEUED
 RUNNING
+RETRY_SCHEDULED
 SUCCESS
 FAILED
 CANCELLED
 ```
+
+`RETRY_SCHEDULED` means the same JobRun is waiting for a future retry. `FAILED` is terminal.
+
+`maxRetries` is retries after the initial execution. Example: `maxRetries = 3` means up to 4 total HTTP attempts: initial attempt with `retryCount = 0`, then retries with `retryCount = 1`, `2`, and `3`.
 
 ---
 

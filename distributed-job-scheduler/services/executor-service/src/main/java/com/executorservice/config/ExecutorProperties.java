@@ -11,6 +11,8 @@ public class ExecutorProperties {
     private String instanceId;
     private Kafka kafka = new Kafka();
     private Http http = new Http();
+    private Retry retry = new Retry();
+    private Execution execution = new Execution();
 
     public String getInstanceId() {
         return instanceId;
@@ -36,8 +38,26 @@ public class ExecutorProperties {
         this.http = http;
     }
 
+    public Retry getRetry() {
+        return retry;
+    }
+
+    public void setRetry(Retry retry) {
+        this.retry = retry;
+    }
+
+    public Execution getExecution() {
+        return execution;
+    }
+
+    public void setExecution(Execution execution) {
+        this.execution = execution;
+    }
+
     public static class Kafka {
         private String topic = "run";
+        private String retryTopic = "retry";
+        private String deadTopic = "dead";
         private Integer concurrency = 3;
 
         public String getTopic() {
@@ -46,6 +66,22 @@ public class ExecutorProperties {
 
         public void setTopic(String topic) {
             this.topic = topic;
+        }
+
+        public String getRetryTopic() {
+            return retryTopic;
+        }
+
+        public void setRetryTopic(String retryTopic) {
+            this.retryTopic = retryTopic;
+        }
+
+        public String getDeadTopic() {
+            return deadTopic;
+        }
+
+        public void setDeadTopic(String deadTopic) {
+            this.deadTopic = deadTopic;
         }
 
         public Integer getConcurrency() {
@@ -101,6 +137,66 @@ public class ExecutorProperties {
 
         public void setIdempotencyKeyHeader(String idempotencyKeyHeader) {
             this.idempotencyKeyHeader = idempotencyKeyHeader;
+        }
+    }
+
+    public static class Retry {
+        private long baseDelayMs = 2000;
+        private long maxDelayMs = 60000;
+        private double jitterFactor = 0.20;
+        private long schedulerIntervalMs = 500;
+        private int batchSize = 100;
+
+        public long getBaseDelayMs() {
+            return baseDelayMs;
+        }
+
+        public void setBaseDelayMs(long baseDelayMs) {
+            this.baseDelayMs = baseDelayMs;
+        }
+
+        public long getMaxDelayMs() {
+            return maxDelayMs;
+        }
+
+        public void setMaxDelayMs(long maxDelayMs) {
+            this.maxDelayMs = maxDelayMs;
+        }
+
+        public double getJitterFactor() {
+            return jitterFactor;
+        }
+
+        public void setJitterFactor(double jitterFactor) {
+            this.jitterFactor = jitterFactor;
+        }
+
+        public long getSchedulerIntervalMs() {
+            return schedulerIntervalMs;
+        }
+
+        public void setSchedulerIntervalMs(long schedulerIntervalMs) {
+            this.schedulerIntervalMs = schedulerIntervalMs;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
+        }
+    }
+
+    public static class Execution {
+        private long runningTimeoutMs = 60000;
+
+        public long getRunningTimeoutMs() {
+            return runningTimeoutMs;
+        }
+
+        public void setRunningTimeoutMs(long runningTimeoutMs) {
+            this.runningTimeoutMs = runningTimeoutMs;
         }
     }
 }

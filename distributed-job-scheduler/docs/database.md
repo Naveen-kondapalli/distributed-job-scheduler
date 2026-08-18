@@ -91,6 +91,7 @@ Each execution generates a new record.
 | retry_count | INTEGER | DEFAULT 0 | Current Retry Attempt |
 | started_at | TIMESTAMP | NULL | Execution Start Time |
 | completed_at | TIMESTAMP | NULL | Execution Completion Time |
+| next_retry_at | TIMESTAMP | NULL | Durable time when the next execution retry becomes eligible |
 | error_message | TEXT | NULL | Failure Reason |
 | created_at | TIMESTAMP | NOT NULL | Created Time |
 | updated_at | TIMESTAMP | NOT NULL | Updated Time |
@@ -157,6 +158,7 @@ Represents the execution lifecycle.
 ```
 QUEUED
 RUNNING
+RETRY_SCHEDULED
 SUCCESS
 FAILED
 CANCELLED
@@ -308,7 +310,11 @@ This avoids duplication across all entities.
 - Job status and Job execution status are intentionally separated.
 - Job status (`ACTIVE`, `PAUSED`, `CANCELLED`) describes whether the schedule definition is enabled.
 - `CANCELLED` is a terminal Job lifecycle state. Cancelling a Job sets `next_run_at` to `NULL` and prevents future scheduling while preserving the Job row and existing JobRun history.
-- JobRun status (`QUEUED`, `RUNNING`, `SUCCESS`, `FAILED`, `CANCELLED`) describes one execution occurrence.
+- JobRun status (`QUEUED`, `RUNNING`, `RETRY_SCHEDULED`, `SUCCESS`, `FAILED`, `CANCELLED`) describes one execution occurrence.
+- `RETRY_SCHEDULED` is non-terminal and means the same JobRun is waiting for a future retry attempt.
+- `max_retries` means retry executions after the initial attempt. `max_retries = 3` allows up to 4 total HTTP attempts: initial attempt plus retries 1, 2, and 3.
+- `retry_count` is the retry attempt number on the same JobRun. Initial execution uses `retry_count = 0`; retry #1 uses `retry_count = 1`.
+- `next_retry_at` is job execution retry timing and is separate from Outbox `next_attempt_at`, which is only Kafka publication retry timing.
 - Every execution creates a new JobRun record, preserving complete execution history.
 - Multiple Executor instances can process jobs concurrently.
 - The Watcher service efficiently finds due jobs using a composite index on `(status, next_run_at)`.
@@ -320,3 +326,5 @@ This avoids duplication across all entities.
 - Future Kafka consumers must process idempotently using `runId` and/or `eventId`.
 - Published outbox events are retained temporarily for observability and cleaned up after the configured retention window.
 - Executor Service consumes the `run` topic in a shared consumer group and idempotently claims `job_runs` with `runId` using an atomic `QUEUED -> RUNNING` update before HTTP execution.
+- Executor Service schedules retryable execution failures by moving the same JobRun to `RETRY_SCHEDULED` with `next_retry_at`; a retry scheduler later creates a durable `JOB_RUN_RETRY_SCHEDULED` outbox event for topic `retry`.
+- Terminal failures create a durable `JOB_RUN_DEAD` outbox event for topic `dead`.

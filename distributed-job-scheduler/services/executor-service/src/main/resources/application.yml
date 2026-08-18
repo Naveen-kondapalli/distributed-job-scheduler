@@ -49,9 +49,19 @@ executor:
   instance-id: ${EXECUTOR_INSTANCE_ID:}
   kafka:
     topic: ${EXECUTOR_RUN_TOPIC:run}
+    retry-topic: ${EXECUTOR_RETRY_TOPIC:retry}
+    dead-topic: ${EXECUTOR_DEAD_TOPIC:dead}
     concurrency: ${EXECUTOR_KAFKA_CONCURRENCY:3}
   http:
     connect-timeout-ms: ${EXECUTOR_HTTP_CONNECT_TIMEOUT_MS:3000}
     read-timeout-ms: ${EXECUTOR_HTTP_READ_TIMEOUT_MS:10000}
     allowed-hosts: ${EXECUTOR_HTTP_ALLOWED_HOSTS:jsonplaceholder.typicode.com}
     idempotency-key-header: ${EXECUTOR_HTTP_IDEMPOTENCY_KEY_HEADER:Idempotency-Key}
+  retry:
+    base-delay-ms: ${EXECUTOR_RETRY_BASE_DELAY_MS:2000}
+    max-delay-ms: ${EXECUTOR_RETRY_MAX_DELAY_MS:60000}
+    jitter-factor: ${EXECUTOR_RETRY_JITTER_FACTOR:0.20}
+    scheduler-interval-ms: ${EXECUTOR_RETRY_SCHEDULER_INTERVAL_MS:500}
+    batch-size: ${EXECUTOR_RETRY_BATCH_SIZE:100}
+  execution:
+    running-timeout-ms: ${EXECUTOR_RUNNING_TIMEOUT_MS:60000}

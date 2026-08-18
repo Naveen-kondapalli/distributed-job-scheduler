@@ -1,248 +1,164 @@
 # Executor Service
 
-The Executor Service consumes `JOB_RUN_QUEUED` events from Kafka topic `run` and executes already-created `JobRun` rows.
+The Executor Service consumes `run`, schedules durable retries, consumes `retry`, and emits terminal failures to `dead`.
 
-## Configuration
+`maxRetries` means retry executions after the initial attempt. Example: `maxRetries = 3` allows 4 total HTTP attempts: initial `retryCount = 0`, then retries `1`, `2`, and `3`.
 
-- Application name: `executor-service`
-- Port: `${SERVER_PORT:8082}`
-- Database: same `job_scheduler` PostgreSQL database as Job Service and Watcher
-- JPA schema mode: `validate`; the Executor does not own schema creation
-- Timezone: `Asia/Kolkata` through Hibernate JDBC timezone and Maven JVM args
-- Kafka bootstrap: `${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}`
-- Consumer group: `${EXECUTOR_CONSUMER_GROUP:executor-service}`
-- Listener concurrency: `${EXECUTOR_KAFKA_CONCURRENCY:3}`
-
-If running from IntelliJ, set VM options for `ExecutorServiceApplication`:
-
-```text
--Duser.timezone=Asia/Kolkata
-```
-
-## Event contract
-
-The Executor deserializes the existing Watcher event payload:
-
-```json
-{
-  "eventId": "uuid",
-  "eventVersion": 1,
-  "runId": 50,
-  "jobId": 10,
-  "scheduledAt": "2026-08-12T15:45:00",
-  "eventType": "JOB_RUN_QUEUED",
-  "occurredAt": "2026-08-12T15:45:30"
-}
-```
-
-Kafka key is the run id as a string. Watcher also publishes headers `eventId`, `eventType`, and `eventVersion`.
-
-Unsupported event versions or event types are logged and skipped in this first phase to avoid poison-message loops.
-
-## Execution lifecycle
-
-Implemented phase:
+## Lifecycle
 
 ```text
 QUEUED -> RUNNING -> SUCCESS
+QUEUED -> RUNNING -> RETRY_SCHEDULED -> RUNNING -> SUCCESS
+QUEUED -> RUNNING -> RETRY_SCHEDULED -> RUNNING -> FAILED
 QUEUED -> RUNNING -> FAILED
 ```
 
-The Executor does not update `jobs.status`. A CRON job can remain `ACTIVE` while individual `job_runs` become `SUCCESS` or `FAILED`.
+`RETRY_SCHEDULED` is non-terminal. Retries use the same `job_runs.id`; no new JobRun is created per attempt. `started_at` is the latest attempt start time. `completed_at` is only terminal.
 
-Already queued runs are executed even if the parent Job is later cancelled; cancellation of queued/running runs is intentionally deferred.
+## Events
 
-## Idempotency and ownership
+- `JOB_RUN_QUEUED`, version `1`, topic `run`, key `runId`
+- `JOB_RUN_RETRY_SCHEDULED`, version `1`, topic `retry`, key `runId`, includes `retryCount`
+- `JOB_RUN_DEAD`, version `1`, topic `dead`, key `runId`
 
-`runId` is the execution identity.
+Retry event uniqueness is deterministic by `runId + retryCount`. Dead event uniqueness is deterministic by `runId`, using the existing unique `outbox_events.event_id`.
 
-Before execution, the Executor validates that the event `runId` exists and that `event.jobId` matches the loaded `job_runs.job_id`.
+## Retry policy
 
-Claiming is atomic:
+Retryable:
 
-```sql
-UPDATE job_runs
-SET status = 'RUNNING',
-    executor_id = ?,
-    started_at = ?
-WHERE id = ?
-  AND status = 'QUEUED';
-```
+- HTTP `408`, `429`, and `5xx`
+- connection/read timeout
+- connect failure
+- identifiable DNS failure
 
-Only the instance that wins this update executes HTTP. Terminal completion checks the same `executor_id`:
+Non-retryable:
 
-```sql
-WHERE id = ?
-  AND status = 'RUNNING'
-  AND executor_id = ?
-```
+- malformed payload
+- missing/invalid URL
+- unsupported method/job type
+- SSRF/allowlist rejection
+- HTTP `4xx` except `429`
 
-Duplicate events for `SUCCESS`, `FAILED`, `CANCELLED`, or `RUNNING` runs are acknowledged and not executed again. Stale `RUNNING` recovery, heartbeats, retries, and DLQ are future phases.
+`429` and `503` support `Retry-After`, capped by `executor.retry.max-delay-ms`.
 
-## Kafka acknowledgement and offset commits
-
-Auto-commit is disabled. The listener uses manual immediate acknowledgement.
-
-Messages are acknowledged after:
-
-- the run reaches `SUCCESS` or `FAILED`;
-- the run is already terminal or already `RUNNING`;
-- the event is malformed, unsupported, or inconsistent and cannot safely be processed.
-
-If a database/infrastructure failure happens before durable handling, the listener does not acknowledge so Kafka can redeliver.
-
-There is no DLQ in this phase; malformed records are logged with metadata only and skipped.
-
-## HTTP semantics
-
-Only `JobType.HTTP` is implemented.
-
-Payload contract:
-
-```json
-{
-  "method": "POST",
-  "url": "https://jsonplaceholder.typicode.com/posts",
-  "headers": {
-    "Content-Type": "application/json"
-  },
-  "body": {
-    "example": true
-  }
-}
-```
-
-Supported methods: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`.
-
-Success is any 2xx response. Non-2xx responses become `FAILED`. The Executor stores only a bounded safe `error_message`, not full payloads, secrets, stack traces, or large response bodies.
-
-HTTP timeouts:
-
-- connect timeout: `${EXECUTOR_HTTP_CONNECT_TIMEOUT_MS:3000}`
-- request/read timeout: `${EXECUTOR_HTTP_READ_TIMEOUT_MS:10000}`
-
-Outbound requests include `Idempotency-Key: <runId>` unless the job payload already supplies that header. The header name is configurable with `EXECUTOR_HTTP_IDEMPOTENCY_KEY_HEADER`.
-
-## SSRF policy
-
-Targets must be explicitly allowlisted:
-
-```yaml
-executor:
-  http:
-    allowed-hosts:
-      - jsonplaceholder.typicode.com
-```
-
-Loopback, link-local, private/site-local, multicast, and cloud metadata addresses are blocked after DNS resolution. This is a first-phase allowlist architecture, not a full enterprise egress proxy.
-
-## Exactly-once limitation
-
-The system provides at-least-once execution with run-level idempotency support, not exactly-once external side effects.
-
-Crash window:
+Backoff:
 
 ```text
-Executor sends HTTP request
-target processes request
-Executor crashes before SUCCESS is committed
-Kafka redelivers
-HTTP request may be sent again
+baseDelay * 2^(retryCount - 1)
+then +/- jitterFactor
+then capped at maxDelay
 ```
 
-Downstream targets should use the `Idempotency-Key` header to deduplicate.
+## Durable retry timing
 
-## Running multiple Executors locally
+On retryable failure with retries remaining, Executor transactionally updates the same JobRun:
 
-Use the same consumer group for every instance:
+```text
+status = RETRY_SCHEDULED
+retry_count = retry_count + 1
+next_retry_at = calculated retry time
+error_message = latest safe failure
+completed_at = null
+```
+
+A retry scheduler polls PostgreSQL with `FOR UPDATE SKIP LOCKED`:
+
+```sql
+status = 'RETRY_SCHEDULED'
+AND next_retry_at <= now
+```
+
+It clears `next_retry_at` and creates one retry outbox event. Watcher’s existing outbox publisher publishes that event to Kafka.
+
+On non-retryable failure or retry exhaustion, Executor transactionally marks `FAILED`, clears `next_retry_at`, and creates one dead outbox event.
+
+## Idempotency
+
+Retry consumer executes only when DB still says:
+
+```text
+status = RETRY_SCHEDULED
+retry_count = event.retryCount
+next_retry_at IS NULL
+```
+
+Duplicate/stale retry events, terminal runs, and `CANCELLED` runs are acknowledged and ignored.
+
+Fresh `RUNNING` redeliveries are not acknowledged as terminal duplicates. If a claimed execution remains `RUNNING`
+longer than `executor.execution.running-timeout-ms`, a later run/retry redelivery may atomically reclaim it by updating
+`executor_id` and `started_at`. This preserves at-least-once recovery after an Executor crash, but it can repeat an
+external HTTP side effect. Outbound requests continue to send `Idempotency-Key: <runId>` so cooperative targets can
+deduplicate.
+
+## Manual Kafka inspection
 
 ```powershell
-$env:SERVER_PORT='8082'
-$env:EXECUTOR_INSTANCE_ID='executor-1'
-$env:EXECUTOR_CONSUMER_GROUP='executor-service'
-.\mvnw.cmd spring-boot:run
+docker exec -it job-scheduler-kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic retry --from-beginning
+docker exec -it job-scheduler-kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic dead --from-beginning
 ```
 
-Second terminal:
+## SQL verification
+
+```sql
+SELECT
+  id,
+  job_id,
+  status,
+  retry_count,
+  next_retry_at,
+  executor_id,
+  started_at,
+  completed_at,
+  error_message
+FROM job_runs
+ORDER BY id DESC;
+```
+
+```sql
+SELECT id, event_id, aggregate_id, event_type, topic, message_key, status, attempt_count, next_attempt_at, published_at, last_error
+FROM outbox_events
+WHERE topic = 'retry'
+ORDER BY id DESC;
+```
+
+```sql
+SELECT id, event_id, aggregate_id, event_type, topic, message_key, status, attempt_count, next_attempt_at, published_at, last_error
+FROM outbox_events
+WHERE topic = 'dead'
+ORDER BY id DESC;
+```
+
+## Manual retry success test
+
+Use a controllable dev endpoint that returns `500` once per `Idempotency-Key`, then `200`. If local, explicitly allowlist the host only in local env, for example:
 
 ```powershell
-$env:SERVER_PORT='8083'
-$env:EXECUTOR_INSTANCE_ID='executor-2'
-$env:EXECUTOR_CONSUMER_GROUP='executor-service'
-.\mvnw.cmd spring-boot:run
+$env:EXECUTOR_HTTP_ALLOWED_HOSTS='host.docker.internal'
+$env:EXECUTOR_RETRY_BASE_DELAY_MS='2000'
+$env:EXECUTOR_RETRY_MAX_DELAY_MS='5000'
 ```
 
-Kafka distributes work only up to the number of partitions in topic `run`. Local Docker Compose creates `run` with 3 partitions for development.
+Create a FUTURE HTTP job with `maxRetries = 2`. After first failure expect `RETRY_SCHEDULED`, `retry_count = 1`, and `next_retry_at` populated. After retry expect `SUCCESS`, `retry_count = 1`, and `next_retry_at = null`.
 
-## Manual end-to-end test
+## Manual retry exhaustion test
 
-1. Start infrastructure:
+Create a FUTURE HTTP job with `maxRetries = 2` pointing to an allowlisted endpoint that always returns `500`.
 
-   ```powershell
-   docker compose up -d
-   ```
+Expected:
 
-2. Start Job Service on 8080, Watcher on 8081, and Executor on 8082.
-
-3. Register and login:
-
-   ```powershell
-   Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/v1/auth/register -ContentType application/json -Body '{"username":"john","email":"john@example.com","password":"password123"}'
-   $login = Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/v1/auth/login -ContentType application/json -Body '{"email":"john@example.com","password":"password123"}'
-   $token = $login.accessToken
-   ```
-
-4. Create a future HTTP job. Use a `scheduledTime` a minute or two in the future in `Asia/Kolkata` local time:
-
-   ```powershell
-   $headers = @{ Authorization = "Bearer $token" }
-   $body = @{
-     name = "Executor success test"
-     description = "Calls jsonplaceholder"
-     jobType = "HTTP"
-     scheduleType = "FUTURE"
-     scheduledTime = "2026-08-17T12:10:00"
-     maxRetries = 3
-     payload = @{
-       method = "GET"
-       url = "https://jsonplaceholder.typicode.com/posts/1"
-     }
-   } | ConvertTo-Json -Depth 10
-   Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/v1/jobs -Headers $headers -ContentType application/json -Body $body
-   ```
-
-5. Wait for Watcher to create a `JobRun`, publish outbox to Kafka, and Executor to consume it.
-
-6. Verify:
-
-   ```sql
-   SELECT
-     id,
-     job_id,
-     status,
-     executor_id,
-     scheduled_at,
-     started_at,
-     completed_at,
-     retry_count,
-     error_message
-   FROM job_runs
-   ORDER BY id DESC;
-   ```
-
-   Expected successful run status: `SUCCESS`.
-
-For a safe non-2xx failure test, allowlist `jsonplaceholder.typicode.com` and create a job with:
-
-```json
-{
-  "method": "GET",
-  "url": "https://jsonplaceholder.typicode.com/invalid-path-for-404"
-}
+```text
+initial attempt retryCount=0
+retry #1 retryCount=1
+retry #2 retryCount=2
+terminal FAILED
+one JOB_RUN_DEAD outbox event
 ```
 
-Expected run status: `FAILED`, with a safe `HTTP 404 returned by target` error.
+## Multiple Executors
 
-## Deferred intentionally
+All Executor instances must use the same consumer group, for example `${EXECUTOR_CONSUMER_GROUP:executor-service}`. Local Docker Compose creates `run` and `retry` with 3 partitions, and `dead` with 1 partition.
 
-This phase does not implement retry topics, DLQ/dead topics, Redis, execution retries, cancellation of running executions, heartbeat, executor registry, notification service, WebSockets, frontend, SCRIPT jobs, EMAIL jobs, WEBHOOK-specific execution, or automatic retry after `FAILED`.
+## Limitations deferred
+
+No Redis heartbeat, running cancellation, executor liveness registry, notification service, frontend, Eureka, API Gateway, dead-topic business consumer, manual retry API, attempt-history table, or exactly-once external execution was implemented.
