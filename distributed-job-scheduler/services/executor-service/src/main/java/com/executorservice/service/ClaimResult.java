@@ -10,6 +10,7 @@ public record ClaimResult(
 ) {
     public enum Outcome {
         CLAIMED,
+        FRESH_RUNNING,
         DUPLICATE_OR_TERMINAL,
         INCONSISTENT_EVENT,
         NOT_FOUND

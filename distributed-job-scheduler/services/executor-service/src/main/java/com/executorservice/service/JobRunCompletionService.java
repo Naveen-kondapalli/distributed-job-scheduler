@@ -2,6 +2,7 @@ package com.executorservice.service;
 
 import com.executorservice.enums.JobRunStatus;
 import com.executorservice.repository.JobRunRepository;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -15,13 +16,14 @@ public class JobRunCompletionService {
 
     private final JobRunRepository jobRunRepository;
     private final String executorInstanceId;
+    private final Clock clock;
 
     @Transactional
     public void markSuccess(Long runId) {
         int updated = jobRunRepository.markSuccess(
                 runId,
                 executorInstanceId,
-                LocalDateTime.now(),
+                LocalDateTime.now(clock),
                 JobRunStatus.RUNNING,
                 JobRunStatus.SUCCESS
         );
@@ -35,7 +37,7 @@ public class JobRunCompletionService {
         int updated = jobRunRepository.markFailed(
                 runId,
                 executorInstanceId,
-                LocalDateTime.now(),
+                LocalDateTime.now(clock),
                 sanitize(errorMessage),
                 JobRunStatus.RUNNING,
                 JobRunStatus.FAILED

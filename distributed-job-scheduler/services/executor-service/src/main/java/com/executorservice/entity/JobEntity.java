@@ -40,4 +40,7 @@ public class JobEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private JobStatus status;
+
+    @Column(name = "max_retries", nullable = false)
+    private Integer maxRetries = 3;
 }

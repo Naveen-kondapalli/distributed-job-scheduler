@@ -2,14 +2,23 @@ package com.executorservice.http;
 
 import com.executorservice.config.ExecutorProperties;
 import com.executorservice.dto.HttpJobPayload;
+import com.executorservice.enums.FailureCategory;
+import java.net.ConnectException;
+import java.net.SocketException;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -34,16 +43,23 @@ public class HttpJobExecutor {
             long durationMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
             int statusCode = response.statusCode();
             if (statusCode >= 200 && statusCode <= 299) {
-                return new HttpExecutionResult(true, statusCode, null, durationMs);
+                return new HttpExecutionResult(true, statusCode, null, null, null, durationMs);
             }
-            return new HttpExecutionResult(false, statusCode, "HTTP " + statusCode + " returned by target", durationMs);
-        } catch (java.net.http.HttpTimeoutException ex) {
-            return failed(started, "Connection timeout");
+            return new HttpExecutionResult(
+                    false,
+                    statusCode,
+                    classifyStatus(statusCode),
+                    "HTTP " + statusCode + " returned by target",
+                    retryAfter(response),
+                    durationMs
+            );
+        } catch (HttpTimeoutException ex) {
+            return failed(started, FailureCategory.RETRYABLE, "Connection timeout");
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            return failed(started, "Execution interrupted");
+            return failed(started, FailureCategory.RETRYABLE, "Execution interrupted");
         } catch (Exception ex) {
-            return failed(started, safeReason(ex));
+            return failed(started, classifyException(ex), safeReason(ex));
         }
     }
 
@@ -106,8 +122,63 @@ public class HttpJobExecutor {
         }
     }
 
-    private HttpExecutionResult failed(long started, String reason) {
-        return new HttpExecutionResult(false, 0, reason, Duration.ofNanos(System.nanoTime() - started).toMillis());
+    private HttpExecutionResult failed(long started, FailureCategory category, String reason) {
+        return new HttpExecutionResult(false, 0, category, reason, null, Duration.ofNanos(System.nanoTime() - started).toMillis());
+    }
+
+    private FailureCategory classifyStatus(int statusCode) {
+        if (statusCode == 408 || statusCode == 429 || statusCode >= 500) {
+            return FailureCategory.RETRYABLE;
+        }
+        return FailureCategory.NON_RETRYABLE;
+    }
+
+    private Duration retryAfter(HttpResponse<?> response) {
+        if (response.statusCode() != 429 && response.statusCode() != 503) {
+            return null;
+        }
+        Optional<String> retryAfter = response.headers().firstValue("Retry-After");
+        if (retryAfter.isEmpty()) {
+            return null;
+        }
+        String value = retryAfter.get().trim();
+        try {
+            long seconds = Long.parseLong(value);
+            return seconds <= 0 ? null : Duration.ofSeconds(seconds);
+        } catch (NumberFormatException ignored) {
+            try {
+                ZonedDateTime retryAt = ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME);
+                Duration delay = Duration.between(ZonedDateTime.now(), retryAt);
+                return delay.isNegative() || delay.isZero() ? null : delay;
+            } catch (Exception ex) {
+                return null;
+            }
+        }
+    }
+
+    FailureCategory classifyException(Throwable ex) {
+        if (containsCause(ex, IllegalArgumentException.class)) {
+            return FailureCategory.NON_RETRYABLE;
+        }
+        if (containsCause(ex, HttpTimeoutException.class)
+                || containsCause(ex, ConnectException.class)
+                || containsCause(ex, UnknownHostException.class)
+                || containsCause(ex, SocketException.class)
+                || containsCause(ex, ClosedChannelException.class)) {
+            return FailureCategory.RETRYABLE;
+        }
+        return FailureCategory.NON_RETRYABLE;
+    }
+
+    private boolean containsCause(Throwable throwable, Class<? extends Throwable> type) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private String safeReason(Exception ex) {

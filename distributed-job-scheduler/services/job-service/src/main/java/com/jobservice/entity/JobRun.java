@@ -26,7 +26,8 @@ import lombok.Setter;
         indexes = {
                 @Index(name = "idx_job_runs_job_id", columnList = "job_id"),
                 @Index(name = "idx_job_runs_status", columnList = "status"),
-                @Index(name = "idx_job_runs_executor_id", columnList = "executor_id")
+                @Index(name = "idx_job_runs_executor_id", columnList = "executor_id"),
+                @Index(name = "idx_job_runs_status_next_retry_at", columnList = "status, next_retry_at")
         }
 )
 public class JobRun extends BaseEntity {
@@ -53,6 +54,9 @@ public class JobRun extends BaseEntity {
 
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
+
+    @Column(name = "next_retry_at")
+    private LocalDateTime nextRetryAt;
 
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
