@@ -3,16 +3,18 @@ package com.executorservice.config;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "executor")
-public class ExecutorProperties {
+public class ExecutorProperties implements InitializingBean {
 
     private String instanceId;
     private Kafka kafka = new Kafka();
     private Http http = new Http();
     private Retry retry = new Retry();
     private Execution execution = new Execution();
+    private Heartbeat heartbeat = new Heartbeat();
 
     public String getInstanceId() {
         return instanceId;
@@ -52,6 +54,19 @@ public class ExecutorProperties {
 
     public void setExecution(Execution execution) {
         this.execution = execution;
+    }
+
+    public Heartbeat getHeartbeat() {
+        return heartbeat;
+    }
+
+    public void setHeartbeat(Heartbeat heartbeat) {
+        this.heartbeat = heartbeat;
+    }
+
+    @Override
+    public void afterPropertiesSet() {
+        heartbeat.validate();
     }
 
     public static class Kafka {
@@ -197,6 +212,56 @@ public class ExecutorProperties {
 
         public void setRunningTimeoutMs(long runningTimeoutMs) {
             this.runningTimeoutMs = runningTimeoutMs;
+        }
+    }
+
+    public static class Heartbeat {
+        private boolean enabled = true;
+        private long intervalMs = 10000;
+        private long ttlSeconds = 30;
+
+        public Duration interval() {
+            return Duration.ofMillis(intervalMs);
+        }
+
+        public Duration ttl() {
+            return Duration.ofSeconds(ttlSeconds);
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public long getIntervalMs() {
+            return intervalMs;
+        }
+
+        public void setIntervalMs(long intervalMs) {
+            this.intervalMs = intervalMs;
+        }
+
+        public long getTtlSeconds() {
+            return ttlSeconds;
+        }
+
+        public void setTtlSeconds(long ttlSeconds) {
+            this.ttlSeconds = ttlSeconds;
+        }
+
+        private void validate() {
+            if (intervalMs <= 0) {
+                throw new IllegalStateException("executor.heartbeat.interval-ms must be greater than 0");
+            }
+            if (ttlSeconds <= 0) {
+                throw new IllegalStateException("executor.heartbeat.ttl-seconds must be greater than 0");
+            }
+            if (ttl().compareTo(interval().multipliedBy(2)) <= 0) {
+                throw new IllegalStateException("executor.heartbeat.ttl-seconds must be safely greater than executor.heartbeat.interval-ms");
+            }
         }
     }
 }

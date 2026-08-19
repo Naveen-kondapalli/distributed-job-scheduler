@@ -159,6 +159,204 @@ one JOB_RUN_DEAD outbox event
 
 All Executor instances must use the same consumer group, for example `${EXECUTOR_CONSUMER_GROUP:executor-service}`. Local Docker Compose creates `run` and `retry` with 3 partitions, and `dead` with 1 partition.
 
+Each Executor instance must use a unique `EXECUTOR_INSTANCE_ID`. This value is reused both for `job_runs.executor_id`
+and for Redis heartbeat identity, so duplicate IDs are unsafe.
+
+## Redis heartbeat
+
+Executor publishes ephemeral liveness metadata to Redis:
+
+```text
+scheduler:executor:heartbeat:{executorId}
+```
+
+Example:
+
+```text
+scheduler:executor:heartbeat:executor-1
+```
+
+The value is JSON so it can be inspected with `redis-cli`. It contains small operational metadata:
+
+- `executorId`
+- `serviceName`
+- `startedAt`
+- `lastHeartbeatAt`
+- `hostname`
+- `applicationVersion`
+- `instanceToken`
+
+The heartbeat does not contain credentials, JWTs, Kafka data, job payloads, authorization headers, or running job
+details.
+
+Default configuration:
+
+```yaml
+executor:
+  heartbeat:
+    enabled: true
+    interval-ms: 10000
+    ttl-seconds: 30
+```
+
+Environment variables:
+
+```powershell
+$env:EXECUTOR_HEARTBEAT_ENABLED='true'
+$env:EXECUTOR_HEARTBEAT_INTERVAL_MS='10000'
+$env:EXECUTOR_HEARTBEAT_TTL_SECONDS='30'
+$env:REDIS_HOST='localhost'
+$env:REDIS_PORT='6379'
+```
+
+Every write refreshes the value and TTL atomically. A heartbeat key should never normally return Redis TTL `-1`
+because that means the key exists without expiration.
+
+Heartbeat writes are independent of Kafka listener threads and job execution. Redis is not used as execution
+durability; PostgreSQL remains the source of truth for `JobRun` state, retry state, and terminal outcomes. Kafka
+consumer group membership is also separate from Redis heartbeat state.
+
+### Duplicate Executor ID behavior
+
+Executor heartbeat uses a per-process `instanceToken`. Registration/refresh is guarded by Redis atomic Lua scripts:
+
+- if no heartbeat exists, the process claims `scheduler:executor:heartbeat:{executorId}` with TTL
+- if the heartbeat exists and has the same `instanceToken`, the process refreshes it
+- if the heartbeat exists with a different `instanceToken`, startup/refresh fails with a strong duplicate-ID error
+- graceful shutdown deletes the heartbeat only when the token still matches
+
+If Redis is unavailable during startup, the Executor logs the heartbeat failure and continues so job execution is not
+coupled to Redis liveness metadata. When Redis recovers, the scheduled heartbeat attempts registration again.
+
+### Failure semantics
+
+```text
+key exists  -> Executor has reported recently
+key absent  -> Executor unavailable OR Redis unavailable/unhealthy
+```
+
+Do not treat a missing heartbeat as absolute proof of process death unless Redis itself is known to be healthy.
+
+On abrupt crash, no shutdown cleanup runs. The key remains until Redis TTL expires, then Redis removes it. On graceful
+shutdown, Executor attempts to remove only its owned heartbeat key immediately. If Redis is unavailable during shutdown,
+Executor logs and continues shutdown.
+
+Actuator `health` and `info` remain separate from Redis heartbeat. Actuator reports application/dependency health;
+heartbeat lets other components observe that a specific Executor identity has reported recently. Heartbeat is not a
+replacement for Kubernetes liveness/readiness probes.
+
+### Manual Redis inspection
+
+Development key listing:
+
+```powershell
+docker exec -it job-scheduler-redis redis-cli KEYS "scheduler:executor:heartbeat:*"
+```
+
+Inspect one Executor:
+
+```powershell
+docker exec -it job-scheduler-redis redis-cli GET scheduler:executor:heartbeat:executor-1
+docker exec -it job-scheduler-redis redis-cli TTL scheduler:executor:heartbeat:executor-1
+```
+
+Redis TTL return values:
+
+- positive value: seconds remaining
+- `-1`: key exists with no expiration; heartbeat keys should not normally do this
+- `-2`: key does not exist
+
+### Manual heartbeat tests
+
+Start infrastructure:
+
+```powershell
+docker compose up -d
+```
+
+Single Executor:
+
+```powershell
+$env:EXECUTOR_INSTANCE_ID='executor-1'
+$env:SERVER_PORT='8082'
+.\mvnw.cmd spring-boot:run
+```
+
+Then inspect:
+
+```powershell
+docker exec -it job-scheduler-redis redis-cli GET scheduler:executor:heartbeat:executor-1
+docker exec -it job-scheduler-redis redis-cli TTL scheduler:executor:heartbeat:executor-1
+```
+
+TTL refresh should look roughly like:
+
+```text
+TTL key -> 27
+wait
+TTL key -> 20
+heartbeat occurs
+TTL key -> 29
+```
+
+Two Executors:
+
+```powershell
+# terminal 1
+$env:SERVER_PORT='8082'
+$env:EXECUTOR_INSTANCE_ID='executor-1'
+.\mvnw.cmd spring-boot:run
+
+# terminal 2
+$env:SERVER_PORT='8083'
+$env:EXECUTOR_INSTANCE_ID='executor-2'
+.\mvnw.cmd spring-boot:run
+```
+
+Redis should show both keys:
+
+```powershell
+docker exec -it job-scheduler-redis redis-cli KEYS "scheduler:executor:heartbeat:*"
+docker exec -it job-scheduler-redis redis-cli TTL scheduler:executor:heartbeat:executor-1
+docker exec -it job-scheduler-redis redis-cli TTL scheduler:executor:heartbeat:executor-2
+```
+
+Duplicate ID:
+
+```powershell
+# while executor-1 is already running
+$env:SERVER_PORT='8083'
+$env:EXECUTOR_INSTANCE_ID='executor-1'
+.\mvnw.cmd spring-boot:run
+```
+
+The second process must not silently take over the active heartbeat.
+
+Crash TTL expiry:
+
+```powershell
+docker exec -it job-scheduler-redis redis-cli TTL scheduler:executor:heartbeat:executor-1
+```
+
+Terminate the Executor abruptly. Keep checking TTL until Redis returns `-2`.
+
+Graceful shutdown:
+
+Start the Executor again, verify the key exists, then stop normally from IntelliJ or Ctrl+C. The owned key should be
+removed immediately when shutdown hooks run.
+
+Redis outage/recovery:
+
+```powershell
+docker stop job-scheduler-redis
+# observe Executor heartbeat warning logs; process should remain running
+docker start job-scheduler-redis
+# heartbeat should re-register/recover automatically
+docker exec -it job-scheduler-redis redis-cli KEYS "scheduler:executor:heartbeat:*"
+```
+
 ## Limitations deferred
 
-No Redis heartbeat, running cancellation, executor liveness registry, notification service, frontend, Eureka, API Gateway, dead-topic business consumer, manual retry API, attempt-history table, or exactly-once external execution was implemented.
+Running cancellation, Redis cancellation keys, Redis Pub/Sub, heartbeat-based JobRun stealing/recovery, new Job Service
+Executor APIs, executor dashboard, notification service, frontend, Eureka, API Gateway, dead-topic business consumer,
+manual retry API, attempt-history table, and exactly-once external execution are still deferred.

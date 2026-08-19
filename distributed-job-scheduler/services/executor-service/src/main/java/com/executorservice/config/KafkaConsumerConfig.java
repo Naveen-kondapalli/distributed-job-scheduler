@@ -2,6 +2,7 @@ package com.executorservice.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
@@ -19,12 +20,14 @@ public class KafkaConsumerConfig {
     ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory(
             ConsumerFactory<String, String> consumerFactory,
             ExecutorProperties properties,
-            CommonErrorHandler commonErrorHandler
+            CommonErrorHandler commonErrorHandler,
+            @Value("${spring.kafka.listener.auto-startup:true}") boolean autoStartup
     ) {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
         factory.setConcurrency(properties.getKafka().getConcurrency());
+        factory.setAutoStartup(autoStartup);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         factory.setCommonErrorHandler(commonErrorHandler);
         return factory;
