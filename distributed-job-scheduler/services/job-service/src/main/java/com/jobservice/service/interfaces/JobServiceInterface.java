@@ -3,6 +3,7 @@ package com.jobservice.service.interfaces;
 import com.jobservice.dto.request.CreateJobRequest;
 import com.jobservice.dto.request.UpdateJobRequest;
 import com.jobservice.dto.response.JobResponse;
+import com.jobservice.dto.response.JobRunStatusResponse;
 import com.jobservice.dto.response.JobStatusResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -20,6 +21,8 @@ public interface JobServiceInterface {
     void deleteJob(Long jobId, Long userId);
 
     JobStatusResponse cancelJob(Long jobId, Long userId);
+
+    JobRunStatusResponse cancelJobRun(Long jobId, Long runId, Long userId);
 
     JobStatusResponse pauseJob(Long jobId, Long userId);
 

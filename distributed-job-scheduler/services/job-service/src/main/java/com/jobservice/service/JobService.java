@@ -1,11 +1,15 @@
 package com.jobservice.service;
 
+import com.jobservice.cancellation.CancellationSignalService;
 import com.jobservice.dto.request.CreateJobRequest;
 import com.jobservice.dto.request.UpdateJobRequest;
 import com.jobservice.dto.response.JobResponse;
+import com.jobservice.dto.response.JobRunStatusResponse;
 import com.jobservice.dto.response.JobStatusResponse;
 import com.jobservice.entity.Job;
+import com.jobservice.entity.JobRun;
 import com.jobservice.entity.User;
+import com.jobservice.enums.JobRunStatus;
 import com.jobservice.enums.JobStatus;
 import com.jobservice.enums.ScheduleType;
 import com.jobservice.exception.BadRequestException;
@@ -14,19 +18,24 @@ import com.jobservice.exception.ErrorCode;
 import com.jobservice.exception.ResourceNotFoundException;
 import com.jobservice.mapper.JobMapper;
 import com.jobservice.repository.JobRepository;
+import com.jobservice.repository.JobRunRepository;
 import com.jobservice.repository.UserRepository;
 import com.jobservice.service.interfaces.JobServiceInterface;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class JobService implements JobServiceInterface {
 
@@ -35,9 +44,12 @@ public class JobService implements JobServiceInterface {
     private static final String CANCELLED_JOB_MESSAGE = "Cancelled jobs cannot be modified";
 
     private final JobRepository jobRepository;
+    private final JobRunRepository jobRunRepository;
     private final UserRepository userRepository;
     private final JobMapper jobMapper;
     private final Clock clock;
+    private final CancellationSignalService cancellationSignalService;
+    private final PlatformTransactionManager transactionManager;
 
     @Override
     @Transactional
@@ -102,6 +114,17 @@ public class JobService implements JobServiceInterface {
     }
 
     @Override
+    public JobRunStatusResponse cancelJobRun(Long jobId, Long runId, Long userId) {
+        CancellationDecision decision = new TransactionTemplate(transactionManager).execute(status -> cancelJobRunInTransaction(jobId, runId, userId));
+        if (decision.signalRequired()) {
+            cancellationSignalService.createSignal(runId, userId);
+            log.info("Running cancellation signal created: runId={}, executorId={}", runId, decision.executorId());
+        }
+        log.info("Cancellation requested: jobId={}, runId={}, status={}, executorId={}", jobId, runId, decision.status(), decision.executorId());
+        return new JobRunStatusResponse(jobId, runId, decision.status());
+    }
+
+    @Override
     @Transactional
     public JobStatusResponse pauseJob(Long jobId, Long userId) {
         Job job = findOwnedJob(jobId, userId);
@@ -136,6 +159,75 @@ public class JobService implements JobServiceInterface {
     private Job findOwnedJob(Long jobId, Long userId) {
         return jobRepository.findByIdAndUserId(jobId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException(JOB_NOT_FOUND_MESSAGE));
+    }
+
+    private CancellationDecision cancelJobRunInTransaction(Long jobId, Long runId, Long userId) {
+        JobRun run = jobRunRepository.findByIdAndJobIdAndJobUserId(runId, jobId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("JobRun not found"));
+        JobRunStatus current = run.getStatus();
+        if (current == JobRunStatus.CANCELLED) {
+            return new CancellationDecision(JobRunStatus.CANCELLED, false, run.getExecutorId());
+        }
+        if (current == JobRunStatus.CANCEL_REQUESTED) {
+            return new CancellationDecision(JobRunStatus.CANCEL_REQUESTED, false, run.getExecutorId());
+        }
+        if (current == JobRunStatus.SUCCESS || current == JobRunStatus.FAILED) {
+            throw new ConflictException(ErrorCode.CONFLICT, "Terminal JobRun cannot be cancelled");
+        }
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        if (current == JobRunStatus.QUEUED || current == JobRunStatus.RETRY_SCHEDULED) {
+            int updated = jobRunRepository.cancelQueuedOrRetryScheduled(
+                    runId,
+                    jobId,
+                    userId,
+                    current,
+                    JobRunStatus.CANCELLED,
+                    now
+            );
+            if (updated != 1) {
+                JobRun latest = jobRunRepository.findByIdAndJobIdAndJobUserId(runId, jobId, userId)
+                        .orElseThrow(() -> new ResourceNotFoundException("JobRun not found"));
+                return cancellationDecisionForConcurrentState(latest.getStatus());
+            }
+            log.info("{} execution cancelled: runId={}", current == JobRunStatus.QUEUED ? "Queued" : "Retry", runId);
+            return new CancellationDecision(JobRunStatus.CANCELLED, false, run.getExecutorId());
+        }
+
+        if (current == JobRunStatus.RUNNING) {
+            int updated = jobRunRepository.requestRunningCancellation(
+                    runId,
+                    jobId,
+                    userId,
+                    now,
+                    JobRunStatus.RUNNING,
+                    JobRunStatus.CANCEL_REQUESTED
+            );
+            if (updated != 1) {
+                JobRun latest = jobRunRepository.findByIdAndJobIdAndJobUserId(runId, jobId, userId)
+                        .orElseThrow(() -> new ResourceNotFoundException("JobRun not found"));
+                return cancellationDecisionForConcurrentState(latest.getStatus());
+            }
+            return new CancellationDecision(JobRunStatus.CANCEL_REQUESTED, true, run.getExecutorId());
+        }
+
+        throw new ConflictException(ErrorCode.CONFLICT, "JobRun cannot be cancelled from status " + current);
+    }
+
+    private CancellationDecision cancellationDecisionForConcurrentState(JobRunStatus status) {
+        if (status == JobRunStatus.CANCELLED) {
+            return new CancellationDecision(JobRunStatus.CANCELLED, false, null);
+        }
+        if (status == JobRunStatus.CANCEL_REQUESTED) {
+            return new CancellationDecision(JobRunStatus.CANCEL_REQUESTED, false, null);
+        }
+        if (status == JobRunStatus.SUCCESS || status == JobRunStatus.FAILED) {
+            throw new ConflictException(ErrorCode.CONFLICT, "Terminal JobRun cannot be cancelled");
+        }
+        throw new ConflictException(ErrorCode.CONFLICT, "JobRun cancellation race lost; current status is " + status);
+    }
+
+    private record CancellationDecision(JobRunStatus status, boolean signalRequired, String executorId) {
     }
 
     private void ensureModifiable(Job job) {

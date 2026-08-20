@@ -15,6 +15,7 @@ public class ExecutorProperties implements InitializingBean {
     private Retry retry = new Retry();
     private Execution execution = new Execution();
     private Heartbeat heartbeat = new Heartbeat();
+    private Cancellation cancellation = new Cancellation();
 
     public String getInstanceId() {
         return instanceId;
@@ -62,6 +63,14 @@ public class ExecutorProperties implements InitializingBean {
 
     public void setHeartbeat(Heartbeat heartbeat) {
         this.heartbeat = heartbeat;
+    }
+
+    public Cancellation getCancellation() {
+        return cancellation;
+    }
+
+    public void setCancellation(Cancellation cancellation) {
+        this.cancellation = cancellation;
     }
 
     @Override
@@ -262,6 +271,27 @@ public class ExecutorProperties implements InitializingBean {
             if (ttl().compareTo(interval().multipliedBy(2)) <= 0) {
                 throw new IllegalStateException("executor.heartbeat.ttl-seconds must be safely greater than executor.heartbeat.interval-ms");
             }
+        }
+    }
+
+    public static class Cancellation {
+        private long signalTtlSeconds = 60;
+        private long recoveryIntervalMs = 5000;
+
+        public long getSignalTtlSeconds() {
+            return signalTtlSeconds;
+        }
+
+        public void setSignalTtlSeconds(long signalTtlSeconds) {
+            this.signalTtlSeconds = signalTtlSeconds;
+        }
+
+        public long getRecoveryIntervalMs() {
+            return recoveryIntervalMs;
+        }
+
+        public void setRecoveryIntervalMs(long recoveryIntervalMs) {
+            this.recoveryIntervalMs = recoveryIntervalMs;
         }
     }
 }

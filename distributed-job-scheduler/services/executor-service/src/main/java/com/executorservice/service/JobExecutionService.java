@@ -4,6 +4,7 @@ import com.executorservice.dto.HttpJobPayload;
 import com.executorservice.dto.JobRunQueuedEvent;
 import com.executorservice.dto.JobRunRetryEvent;
 import com.executorservice.entity.JobRunEntity;
+import com.executorservice.cancellation.ExecutorCancellationService;
 import com.executorservice.enums.FailureCategory;
 import com.executorservice.enums.JobRunStatus;
 import com.executorservice.enums.JobType;
@@ -29,6 +30,7 @@ public class JobExecutionService {
     private final JobRunCompletionService completionService;
     private final ExecutionFailureHandler failureHandler;
     private final HttpJobExecutor httpJobExecutor;
+    private final ExecutorCancellationService cancellationService;
     private final ObjectMapper objectMapper;
     private final String executorInstanceId;
     private final Counter successCounter;
@@ -43,6 +45,7 @@ public class JobExecutionService {
             JobRunCompletionService completionService,
             ExecutionFailureHandler failureHandler,
             HttpJobExecutor httpJobExecutor,
+            ExecutorCancellationService cancellationService,
             ObjectMapper objectMapper,
             String executorInstanceId,
             MeterRegistry meterRegistry
@@ -51,6 +54,7 @@ public class JobExecutionService {
         this.completionService = completionService;
         this.failureHandler = failureHandler;
         this.httpJobExecutor = httpJobExecutor;
+        this.cancellationService = cancellationService;
         this.objectMapper = objectMapper;
         this.executorInstanceId = executorInstanceId;
         this.successCounter = meterRegistry.counter("executor.jobs.success");
@@ -150,6 +154,10 @@ public class JobExecutionService {
 
     private void executeClaimedRun(JobRunEntity run, boolean retryAttempt) {
         if (run.getJob().getJobType() != JobType.HTTP) {
+            if (cancellationService.completeIfCancellationRequested(run.getId())) {
+                log.info("Queued execution cancelled before unsupported job handling: runId={}", run.getId());
+                return;
+            }
             failureHandler.handleFailure(run, new HttpExecutionResult(false, 0, FailureCategory.NON_RETRYABLE, "Unsupported job type", null, 0));
             failedCounter.increment();
             log.info("Execution failed: runId={}, reason={}, durationMs={}", run.getId(), "Unsupported job type", 0);
@@ -157,8 +165,20 @@ public class JobExecutionService {
         }
 
         HttpJobPayload payload = toHttpPayload(run);
+        if (cancellationService.signalExists(run.getId())) {
+            log.debug("Cancellation signal observed before HTTP request: runId={}, executorId={}", run.getId(), executorInstanceId);
+        }
+        if (cancellationService.completeIfCancellationRequested(run.getId())) {
+            log.info("Execution cancelled before HTTP request: runId={}, executorId={}", run.getId(), executorInstanceId);
+            return;
+        }
         HttpExecutionResult result = httpJobExecutor.execute(payload, run.getId());
         httpDurationTimer.record(result.durationMs(), TimeUnit.MILLISECONDS);
+
+        if (cancellationService.completeIfCancellationRequested(run.getId())) {
+            log.info("Execution cancellation won before completion write: runId={}, executorId={}", run.getId(), executorInstanceId);
+            return;
+        }
 
         if (result.success()) {
             completionService.markSuccess(run.getId());

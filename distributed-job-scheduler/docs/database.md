@@ -159,6 +159,7 @@ Represents the execution lifecycle.
 QUEUED
 RUNNING
 RETRY_SCHEDULED
+CANCEL_REQUESTED
 SUCCESS
 FAILED
 CANCELLED
@@ -310,8 +311,10 @@ This avoids duplication across all entities.
 - Job status and Job execution status are intentionally separated.
 - Job status (`ACTIVE`, `PAUSED`, `CANCELLED`) describes whether the schedule definition is enabled.
 - `CANCELLED` is a terminal Job lifecycle state. Cancelling a Job sets `next_run_at` to `NULL` and prevents future scheduling while preserving the Job row and existing JobRun history.
-- JobRun status (`QUEUED`, `RUNNING`, `RETRY_SCHEDULED`, `SUCCESS`, `FAILED`, `CANCELLED`) describes one execution occurrence.
+- JobRun status (`QUEUED`, `RUNNING`, `RETRY_SCHEDULED`, `CANCEL_REQUESTED`, `SUCCESS`, `FAILED`, `CANCELLED`) describes one execution occurrence.
 - `RETRY_SCHEDULED` is non-terminal and means the same JobRun is waiting for a future retry attempt.
+- `CANCEL_REQUESTED` is non-terminal durable cancellation intent for a running execution. It must not be retried or re-executed; the owning Executor or stale-cancellation recovery moves it to `CANCELLED`.
+- `CANCELLED` is terminal for one JobRun and does not imply the parent Job schedule is cancelled.
 - `max_retries` means retry executions after the initial attempt. `max_retries = 3` allows up to 4 total HTTP attempts: initial attempt plus retries 1, 2, and 3.
 - `retry_count` is the retry attempt number on the same JobRun. Initial execution uses `retry_count = 0`; retry #1 uses `retry_count = 1`.
 - `next_retry_at` is job execution retry timing and is separate from Outbox `next_attempt_at`, which is only Kafka publication retry timing.

@@ -11,9 +11,12 @@ QUEUED -> RUNNING -> SUCCESS
 QUEUED -> RUNNING -> RETRY_SCHEDULED -> RUNNING -> SUCCESS
 QUEUED -> RUNNING -> RETRY_SCHEDULED -> RUNNING -> FAILED
 QUEUED -> RUNNING -> FAILED
+QUEUED -> CANCELLED
+QUEUED -> RUNNING -> CANCEL_REQUESTED -> CANCELLED
+QUEUED -> RUNNING -> RETRY_SCHEDULED -> CANCELLED
 ```
 
-`RETRY_SCHEDULED` is non-terminal. Retries use the same `job_runs.id`; no new JobRun is created per attempt. `started_at` is the latest attempt start time. `completed_at` is only terminal.
+`RETRY_SCHEDULED` and `CANCEL_REQUESTED` are non-terminal. Retries use the same `job_runs.id`; no new JobRun is created per attempt. `started_at` is the latest attempt start time. `completed_at` is only terminal.
 
 ## Events
 
@@ -83,13 +86,73 @@ retry_count = event.retryCount
 next_retry_at IS NULL
 ```
 
-Duplicate/stale retry events, terminal runs, and `CANCELLED` runs are acknowledged and ignored.
+Duplicate/stale retry events, terminal runs, `CANCEL_REQUESTED`, and `CANCELLED` runs are acknowledged and ignored unless the current Executor owns the `CANCEL_REQUESTED` run and is finalizing cancellation.
 
 Fresh `RUNNING` redeliveries are not acknowledged as terminal duplicates. If a claimed execution remains `RUNNING`
 longer than `executor.execution.running-timeout-ms`, a later run/retry redelivery may atomically reclaim it by updating
 `executor_id` and `started_at`. This preserves at-least-once recovery after an Executor crash, but it can repeat an
 external HTTP side effect. Outbound requests continue to send `Idempotency-Key: <runId>` so cooperative targets can
 deduplicate.
+
+## Execution cancellation
+
+JobRun cancellation is separate from Job schedule cancellation.
+
+```text
+PATCH /api/v1/jobs/{jobId}/cancel              -> cancels future scheduling
+PATCH /api/v1/jobs/{jobId}/runs/{runId}/cancel -> cancels one execution
+```
+
+For `QUEUED` and `RETRY_SCHEDULED`, Job Service performs a durable DB-only transition to `CANCELLED`.
+
+For `RUNNING`, Job Service atomically transitions `RUNNING -> CANCEL_REQUESTED` and writes a short-lived Redis signal:
+
+```text
+scheduler:execution:cancel:{runId}
+```
+
+Example:
+
+```text
+scheduler:execution:cancel:100
+```
+
+The value is JSON:
+
+```json
+{
+  "runId": 100,
+  "requestedAt": "2026-08-20T12:00:00",
+  "requestedBy": "user:1"
+}
+```
+
+The signal TTL defaults to 60 seconds. The key is removed by the owning Executor when practical; TTL is fallback cleanup.
+
+Redis is only a signal. PostgreSQL remains the source of truth. If Redis signalling fails after `CANCEL_REQUESTED` is committed, the cancellation intent remains durable and the API reports that the signal could not be delivered.
+
+Executor checks cancellation:
+
+1. before outbound HTTP execution
+2. after HTTP returns, before marking `SUCCESS`, `FAILED`, or `RETRY_SCHEDULED`
+3. through stale `CANCEL_REQUESTED` recovery using `executor.execution.running-timeout-ms`
+
+Only the Executor whose `EXECUTOR_INSTANCE_ID` matches `job_runs.executor_id` may finalize an active cancellation. Stale recovery may finalize old `CANCEL_REQUESTED` rows after the running timeout so cancellation intent does not remain forever if the owner crashes.
+
+Cancellation is best-effort. If an HTTP request has already reached the target, external side effects may already have happened. Cancellation prevents unsafe local state rewrites; it does not provide external compensation or exactly-once rollback.
+
+Race handling:
+
+- If `SUCCESS` or `FAILED` commits first, a later cancel request returns `409 Conflict`.
+- If `CANCEL_REQUESTED` commits first, Executor conditional updates from `RUNNING` fail and the run is finalized as `CANCELLED`.
+- `CANCEL_REQUESTED` never moves to `RETRY_SCHEDULED` and never creates a dead event.
+
+Redis inspection:
+
+```powershell
+docker exec -it job-scheduler-redis redis-cli GET scheduler:execution:cancel:<runId>
+docker exec -it job-scheduler-redis redis-cli TTL scheduler:execution:cancel:<runId>
+```
 
 ## Manual Kafka inspection
 
@@ -357,6 +420,6 @@ docker exec -it job-scheduler-redis redis-cli KEYS "scheduler:executor:heartbeat
 
 ## Limitations deferred
 
-Running cancellation, Redis cancellation keys, Redis Pub/Sub, heartbeat-based JobRun stealing/recovery, new Job Service
-Executor APIs, executor dashboard, notification service, frontend, Eureka, API Gateway, dead-topic business consumer,
-manual retry API, attempt-history table, and exactly-once external execution are still deferred.
+Bulk cancellation, Redis Pub/Sub-only cancellation, heartbeat-based JobRun stealing/recovery, new Job Service Executor
+APIs, executor dashboard, notification service, frontend, Eureka, API Gateway, dead-topic business consumer, manual
+retry API, attempt-history table, and exactly-once external execution are still deferred.

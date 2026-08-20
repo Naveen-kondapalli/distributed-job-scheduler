@@ -1,5 +1,6 @@
 package com.jobservice.exception;
 
+import com.jobservice.cancellation.CancellationSignalException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import java.time.Instant;
@@ -134,6 +135,21 @@ public class GlobalExceptionHandler {
                 HttpStatus.CONFLICT,
                 ErrorCode.DATA_INTEGRITY_VIOLATION,
                 "The request conflicts with existing data",
+                request,
+                List.of()
+        );
+    }
+
+    @ExceptionHandler(CancellationSignalException.class)
+    public ResponseEntity<ApiErrorResponse> handleCancellationSignalException(
+            CancellationSignalException exception,
+            HttpServletRequest request
+    ) {
+        LOGGER.warn("Cancellation signal delivery failed for {} {}", request.getMethod(), request.getRequestURI(), exception);
+        return buildResponse(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                ErrorCode.CANCELLATION_SIGNAL_FAILED,
+                exception.getMessage(),
                 request,
                 List.of()
         );
