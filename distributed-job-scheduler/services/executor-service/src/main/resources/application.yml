@@ -76,3 +76,6 @@ executor:
     enabled: ${EXECUTOR_HEARTBEAT_ENABLED:true}
     interval-ms: ${EXECUTOR_HEARTBEAT_INTERVAL_MS:10000}
     ttl-seconds: ${EXECUTOR_HEARTBEAT_TTL_SECONDS:30}
+  cancellation:
+    signal-ttl-seconds: ${EXECUTOR_CANCELLATION_SIGNAL_TTL_SECONDS:60}
+    recovery-interval-ms: ${EXECUTOR_CANCELLATION_RECOVERY_INTERVAL_MS:5000}

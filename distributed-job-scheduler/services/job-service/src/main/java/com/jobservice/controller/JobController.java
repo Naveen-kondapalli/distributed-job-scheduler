@@ -3,6 +3,7 @@ package com.jobservice.controller;
 import com.jobservice.dto.request.CreateJobRequest;
 import com.jobservice.dto.request.UpdateJobRequest;
 import com.jobservice.dto.response.JobResponse;
+import com.jobservice.dto.response.JobRunStatusResponse;
 import com.jobservice.dto.response.JobStatusResponse;
 import com.jobservice.security.UserPrincipal;
 import com.jobservice.service.interfaces.JobServiceInterface;
@@ -79,6 +80,15 @@ public class JobController {
             @AuthenticationPrincipal UserPrincipal principal
     ) {
         return ResponseEntity.ok(jobService.cancelJob(jobId, principal.getId()));
+    }
+
+    @PatchMapping("/{jobId}/runs/{runId}/cancel")
+    public ResponseEntity<JobRunStatusResponse> cancelJobRun(
+            @PathVariable Long jobId,
+            @PathVariable Long runId,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        return ResponseEntity.ok(jobService.cancelJobRun(jobId, runId, principal.getId()));
     }
 
     @PatchMapping("/{jobId}/pause")

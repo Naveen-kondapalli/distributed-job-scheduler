@@ -51,6 +51,9 @@ public class JobRunEntity {
     @Column(name = "started_at")
     private LocalDateTime startedAt;
 
+    @Column(name = "cancel_requested_at")
+    private LocalDateTime cancelRequestedAt;
+
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
 

@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
 
@@ -17,6 +18,7 @@ public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
     Optional<JobRunEntity> findWithJobById(Long id);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query("""
             UPDATE JobRunEntity run
             SET run.status = :runningStatus,
@@ -35,6 +37,7 @@ public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
     );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query("""
             UPDATE JobRunEntity run
             SET run.status = :runningStatus,
@@ -55,6 +58,7 @@ public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
     );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query("""
             UPDATE JobRunEntity run
             SET run.executorId = :executorId,
@@ -90,6 +94,7 @@ public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
     );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query("""
             UPDATE JobRunEntity run
             SET run.status = :successStatus,
@@ -109,6 +114,7 @@ public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
     );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query("""
             UPDATE JobRunEntity run
             SET run.status = :failedStatus,
@@ -129,6 +135,7 @@ public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
     );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query("""
             UPDATE JobRunEntity run
             SET run.status = :retryScheduledStatus,
@@ -150,5 +157,67 @@ public interface JobRunRepository extends JpaRepository<JobRunEntity, Long> {
             @Param("errorMessage") String errorMessage,
             @Param("runningStatus") JobRunStatus runningStatus,
             @Param("retryScheduledStatus") JobRunStatus retryScheduledStatus
+    );
+
+    @Query("""
+            SELECT run.status
+            FROM JobRunEntity run
+            WHERE run.id = :runId
+              AND run.executorId = :executorId
+            """)
+    Optional<JobRunStatus> findOwnedStatus(
+            @Param("runId") Long runId,
+            @Param("executorId") String executorId
+    );
+
+    @Query("""
+            SELECT run
+            FROM JobRunEntity run
+            WHERE run.status = :cancelRequestedStatus
+              AND run.cancelRequestedAt IS NOT NULL
+              AND run.cancelRequestedAt <= :requestedBefore
+            ORDER BY run.cancelRequestedAt ASC, run.id ASC
+            """)
+    List<JobRunEntity> findStaleCancellationRequests(
+            @Param("requestedBefore") LocalDateTime requestedBefore,
+            @Param("cancelRequestedStatus") JobRunStatus cancelRequestedStatus
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            UPDATE JobRunEntity run
+            SET run.status = :cancelledStatus,
+                run.completedAt = :completedAt,
+                run.nextRetryAt = NULL,
+                run.errorMessage = NULL
+            WHERE run.id = :runId
+              AND run.executorId = :executorId
+              AND run.status = :cancelRequestedStatus
+            """)
+    int markCancelledIfOwnedAndRequested(
+            @Param("runId") Long runId,
+            @Param("executorId") String executorId,
+            @Param("completedAt") LocalDateTime completedAt,
+            @Param("cancelRequestedStatus") JobRunStatus cancelRequestedStatus,
+            @Param("cancelledStatus") JobRunStatus cancelledStatus
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            UPDATE JobRunEntity run
+            SET run.status = :cancelledStatus,
+                run.completedAt = :completedAt,
+                run.nextRetryAt = NULL,
+                run.errorMessage = NULL
+            WHERE run.id = :runId
+              AND run.status = :cancelRequestedStatus
+            """)
+    int markCancelRequestedRunCancelled(
+            @Param("runId") Long runId,
+            @Param("completedAt") LocalDateTime completedAt,
+            @Param("cancelRequestedStatus") JobRunStatus cancelRequestedStatus,
+            @Param("cancelledStatus") JobRunStatus cancelledStatus
     );
 }
