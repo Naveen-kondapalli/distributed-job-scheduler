@@ -8,6 +8,7 @@ import com.watcherservice.enums.JobStatus;
 import com.watcherservice.enums.OutboxStatus;
 import com.watcherservice.enums.ScheduleType;
 import com.watcherservice.events.JobRunQueuedEvent;
+import com.watcherservice.observability.WatcherMetrics;
 import com.watcherservice.repository.JobRepository;
 import com.watcherservice.repository.JobRunRepository;
 import com.watcherservice.repository.OutboxEventRepository;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +37,7 @@ public class JobClaimService {
     private final JobRunRepository jobRunRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+    private final WatcherMetrics metrics;
 
     @Transactional
     public void claimDueOccurrences(LocalDateTime now, int batchSize) {
@@ -66,13 +69,20 @@ public class JobClaimService {
             job.setNextRunAt(null);
         }
 
-        log.info(
-                "Job occurrence queued: jobId={}, runId={}, scheduledAt={}, nextRunAt={}",
-                job.getId(),
-                savedRun.getId(),
-                scheduledAt,
-                job.getNextRunAt()
-        );
+        metrics.jobClaimed(job.getScheduleType());
+        try {
+            MDC.put("jobId", String.valueOf(job.getId()));
+            MDC.put("runId", String.valueOf(savedRun.getId()));
+            log.info(
+                    "Job occurrence queued: jobId={}, runId={}, scheduledAt={}, nextRunAt={}",
+                    job.getId(),
+                    savedRun.getId(),
+                    scheduledAt,
+                    job.getNextRunAt()
+            );
+        } finally {
+            MDC.clear();
+        }
     }
 
     private OutboxEventEntity createJobRunQueuedOutboxEvent(

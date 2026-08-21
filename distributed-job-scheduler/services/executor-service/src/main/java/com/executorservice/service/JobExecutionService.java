@@ -10,10 +10,7 @@ import com.executorservice.enums.JobRunStatus;
 import com.executorservice.enums.JobType;
 import com.executorservice.http.HttpExecutionResult;
 import com.executorservice.http.HttpJobExecutor;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
-import java.util.concurrent.TimeUnit;
+import com.executorservice.observability.ExecutorMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
@@ -33,12 +30,7 @@ public class JobExecutionService {
     private final ExecutorCancellationService cancellationService;
     private final ObjectMapper objectMapper;
     private final String executorInstanceId;
-    private final Counter successCounter;
-    private final Counter failedCounter;
-    private final Counter duplicateCounter;
-    private final Counter retrySuccessCounter;
-    private final Counter retryFailedCounter;
-    private final Timer httpDurationTimer;
+    private final ExecutorMetrics metrics;
 
     public JobExecutionService(
             JobRunClaimService claimService,
@@ -48,7 +40,7 @@ public class JobExecutionService {
             ExecutorCancellationService cancellationService,
             ObjectMapper objectMapper,
             String executorInstanceId,
-            MeterRegistry meterRegistry
+            ExecutorMetrics metrics
     ) {
         this.claimService = claimService;
         this.completionService = completionService;
@@ -57,12 +49,7 @@ public class JobExecutionService {
         this.cancellationService = cancellationService;
         this.objectMapper = objectMapper;
         this.executorInstanceId = executorInstanceId;
-        this.successCounter = meterRegistry.counter("executor.jobs.success");
-        this.failedCounter = meterRegistry.counter("executor.jobs.failed");
-        this.duplicateCounter = meterRegistry.counter("executor.jobs.duplicate");
-        this.retrySuccessCounter = meterRegistry.counter("executor.retry.success");
-        this.retryFailedCounter = meterRegistry.counter("executor.retry.failed");
-        this.httpDurationTimer = meterRegistry.timer("executor.http.duration");
+        this.metrics = metrics;
     }
 
     public ProcessingDecision process(JobRunQueuedEvent event) {
@@ -87,12 +74,12 @@ public class JobExecutionService {
             return ProcessingDecision.ack();
         }
         if (claim.outcome() == ClaimResult.Outcome.FRESH_RUNNING) {
-            duplicateCounter.increment();
+            metrics.duplicateKafkaEvent("run");
             log.info("Fresh RUNNING event left unacknowledged for stale-running recovery: runId={}, status={}", event.runId(), claim.existingStatus());
             return ProcessingDecision.nack();
         }
         if (claim.outcome() == ClaimResult.Outcome.DUPLICATE_OR_TERMINAL) {
-            duplicateCounter.increment();
+            metrics.duplicateKafkaEvent("run");
             log.info("Duplicate event ignored: runId={}, status={}", event.runId(), claim.existingStatus());
             return ProcessingDecision.ack();
         }
@@ -126,7 +113,7 @@ public class JobExecutionService {
             return ProcessingDecision.ack();
         }
         if (claim.outcome() == ClaimResult.Outcome.FRESH_RUNNING) {
-            duplicateCounter.increment();
+            metrics.duplicateKafkaEvent("retry");
             log.info(
                     "Fresh RUNNING retry event left unacknowledged for stale-running recovery: runId={}, retryCount={}, status={}",
                     event.runId(),
@@ -136,7 +123,7 @@ public class JobExecutionService {
             return ProcessingDecision.nack();
         }
         if (claim.outcome() == ClaimResult.Outcome.DUPLICATE_OR_TERMINAL) {
-            duplicateCounter.increment();
+            metrics.duplicateKafkaEvent("retry");
             log.info("Stale/duplicate retry event ignored: runId={}, retryCount={}, status={}", event.runId(), event.retryCount(), claim.existingStatus());
             return ProcessingDecision.ack();
         }
@@ -155,11 +142,14 @@ public class JobExecutionService {
     private void executeClaimedRun(JobRunEntity run, boolean retryAttempt) {
         if (run.getJob().getJobType() != JobType.HTTP) {
             if (cancellationService.completeIfCancellationRequested(run.getId())) {
+                metrics.execution(run.getJob().getJobType(), "cancelled");
+                metrics.executionDuration(run.getJob().getJobType(), "cancelled", 0);
                 log.info("Queued execution cancelled before unsupported job handling: runId={}", run.getId());
                 return;
             }
             failureHandler.handleFailure(run, new HttpExecutionResult(false, 0, FailureCategory.NON_RETRYABLE, "Unsupported job type", null, 0));
-            failedCounter.increment();
+            metrics.execution(run.getJob().getJobType(), "failed");
+            metrics.executionDuration(run.getJob().getJobType(), "failed", 0);
             log.info("Execution failed: runId={}, reason={}, durationMs={}", run.getId(), "Unsupported job type", 0);
             return;
         }
@@ -169,32 +159,54 @@ public class JobExecutionService {
             log.debug("Cancellation signal observed before HTTP request: runId={}, executorId={}", run.getId(), executorInstanceId);
         }
         if (cancellationService.completeIfCancellationRequested(run.getId())) {
+            metrics.execution(run.getJob().getJobType(), "cancelled");
+            metrics.executionDuration(run.getJob().getJobType(), "cancelled", 0);
             log.info("Execution cancelled before HTTP request: runId={}, executorId={}", run.getId(), executorInstanceId);
             return;
         }
         HttpExecutionResult result = httpJobExecutor.execute(payload, run.getId());
-        httpDurationTimer.record(result.durationMs(), TimeUnit.MILLISECONDS);
+        metrics.httpRequest(httpOutcome(result));
 
         if (cancellationService.completeIfCancellationRequested(run.getId())) {
+            metrics.execution(run.getJob().getJobType(), "cancelled");
+            metrics.executionDuration(run.getJob().getJobType(), "cancelled", result.durationMs());
             log.info("Execution cancellation won before completion write: runId={}, executorId={}", run.getId(), executorInstanceId);
             return;
         }
 
         if (result.success()) {
             completionService.markSuccess(run.getId());
-            successCounter.increment();
+            metrics.execution(run.getJob().getJobType(), "success");
+            metrics.executionDuration(run.getJob().getJobType(), "success", result.durationMs());
             if (retryAttempt) {
-                retrySuccessCounter.increment();
+                metrics.retrySuccess();
             }
             log.info("Execution succeeded: runId={}, statusCode={}, durationMs={}", run.getId(), result.statusCode(), result.durationMs());
         } else {
             ExecutionFailureHandler.FailureDecision decision = failureHandler.handleFailure(run, result);
-            failedCounter.increment();
-            if (retryAttempt) {
-                retryFailedCounter.increment();
-            }
+            metrics.execution(run.getJob().getJobType(), "failed");
+            metrics.executionDuration(run.getJob().getJobType(), "failed", result.durationMs());
             log.info("Execution failed: runId={}, reason={}, durationMs={}", run.getId(), result.failureReason(), result.durationMs());
         }
+    }
+
+    private String httpOutcome(HttpExecutionResult result) {
+        if (result.statusCode() >= 200 && result.statusCode() < 300) {
+            return "2xx";
+        }
+        if (result.statusCode() >= 300 && result.statusCode() < 400) {
+            return "3xx";
+        }
+        if (result.statusCode() >= 400 && result.statusCode() < 500) {
+            return "4xx";
+        }
+        if (result.statusCode() >= 500 && result.statusCode() < 600) {
+            return "5xx";
+        }
+        if (result.failureCategory() == FailureCategory.RETRYABLE) {
+            return "network_error";
+        }
+        return "blocked";
     }
 
     private HttpJobPayload toHttpPayload(JobRunEntity run) {

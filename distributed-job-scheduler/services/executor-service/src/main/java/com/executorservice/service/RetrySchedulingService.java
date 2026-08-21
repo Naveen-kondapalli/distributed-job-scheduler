@@ -1,9 +1,9 @@
 package com.executorservice.service;
 
 import com.executorservice.entity.JobRunEntity;
+import com.executorservice.enums.FailureCategory;
 import com.executorservice.repository.JobRunRepository;
 import com.executorservice.repository.OutboxEventRepository;
-import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -19,20 +19,17 @@ public class RetrySchedulingService {
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxEventFactory outboxEventFactory;
     private final Clock clock;
-    private final io.micrometer.core.instrument.Counter retryEventCreatedCounter;
 
     public RetrySchedulingService(
             JobRunRepository jobRunRepository,
             OutboxEventRepository outboxEventRepository,
             OutboxEventFactory outboxEventFactory,
-            Clock clock,
-            MeterRegistry meterRegistry
+            Clock clock
     ) {
         this.jobRunRepository = jobRunRepository;
         this.outboxEventRepository = outboxEventRepository;
         this.outboxEventFactory = outboxEventFactory;
         this.clock = clock;
-        this.retryEventCreatedCounter = meterRegistry.counter("executor.retry.event.created");
     }
 
     @Transactional
@@ -45,10 +42,9 @@ public class RetrySchedulingService {
                     run,
                     safeInt(run.getRetryCount()),
                     retryAt == null ? LocalDateTime.now(clock) : retryAt,
-                    com.executorservice.enums.FailureCategory.RETRYABLE
+                    FailureCategory.RETRYABLE
             );
             outboxEventRepository.findByEventId(retryEvent.getEventId()).orElseGet(() -> outboxEventRepository.save(retryEvent));
-            retryEventCreatedCounter.increment();
             log.info("Due retry event created: runId={}, retryCount={}", run.getId(), run.getRetryCount());
         }
         return dueRuns.size();

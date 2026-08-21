@@ -5,10 +5,9 @@ import com.executorservice.entity.OutboxEventEntity;
 import com.executorservice.enums.FailureCategory;
 import com.executorservice.enums.JobRunStatus;
 import com.executorservice.http.HttpExecutionResult;
+import com.executorservice.observability.ExecutorMetrics;
 import com.executorservice.repository.JobRunRepository;
 import com.executorservice.repository.OutboxEventRepository;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import lombok.extern.slf4j.Slf4j;
@@ -27,9 +26,7 @@ public class ExecutionFailureHandler {
     private final RetryBackoffService retryBackoffService;
     private final String executorInstanceId;
     private final Clock clock;
-    private final Counter retryScheduledCounter;
-    private final Counter retryExhaustedCounter;
-    private final Counter deadCreatedCounter;
+    private final ExecutorMetrics metrics;
 
     public ExecutionFailureHandler(
             JobRunRepository jobRunRepository,
@@ -38,7 +35,7 @@ public class ExecutionFailureHandler {
             RetryBackoffService retryBackoffService,
             String executorInstanceId,
             Clock clock,
-            MeterRegistry meterRegistry
+            ExecutorMetrics metrics
     ) {
         this.jobRunRepository = jobRunRepository;
         this.outboxEventRepository = outboxEventRepository;
@@ -46,9 +43,7 @@ public class ExecutionFailureHandler {
         this.retryBackoffService = retryBackoffService;
         this.executorInstanceId = executorInstanceId;
         this.clock = clock;
-        this.retryScheduledCounter = meterRegistry.counter("executor.retry.scheduled");
-        this.retryExhaustedCounter = meterRegistry.counter("executor.retry.exhausted");
-        this.deadCreatedCounter = meterRegistry.counter("executor.dead.created");
+        this.metrics = metrics;
     }
 
     @Transactional
@@ -74,14 +69,14 @@ public class ExecutionFailureHandler {
             if (updated != 1) {
                 throw new IllegalStateException("Unable to schedule retry; ownership, status, or retryCount changed");
             }
-            retryScheduledCounter.increment();
+            metrics.retryScheduled(category);
             log.info("Retry scheduled: runId={}, retryCount={}, retryAt={}, reason={}", run.getId(), nextRetryCount, retryAt, safeReason);
             return FailureDecision.RETRY_SCHEDULED;
         }
 
         markTerminalFailedWithDeadEvent(run, category, safeReason);
         if (category == FailureCategory.RETRYABLE) {
-            retryExhaustedCounter.increment();
+            metrics.retryExhausted(category);
             log.info("Retries exhausted: runId={}, retryCount={}", run.getId(), currentRetryCount);
         }
         return FailureDecision.DEAD;
@@ -102,7 +97,7 @@ public class ExecutionFailureHandler {
         JobRunEntity failed = jobRunRepository.findWithJobById(run.getId()).orElseThrow();
         OutboxEventEntity deadEvent = outboxEventFactory.deadEvent(failed, category, safeReason);
         outboxEventRepository.findByEventId(deadEvent.getEventId()).orElseGet(() -> outboxEventRepository.save(deadEvent));
-        deadCreatedCounter.increment();
+        metrics.deadCreated(category);
         log.info("Dead event created: runId={}", run.getId());
     }
 

@@ -17,6 +17,7 @@ import com.jobservice.exception.ConflictException;
 import com.jobservice.exception.ErrorCode;
 import com.jobservice.exception.ResourceNotFoundException;
 import com.jobservice.mapper.JobMapper;
+import com.jobservice.observability.JobServiceMetrics;
 import com.jobservice.repository.JobRepository;
 import com.jobservice.repository.JobRunRepository;
 import com.jobservice.repository.UserRepository;
@@ -50,6 +51,7 @@ public class JobService implements JobServiceInterface {
     private final Clock clock;
     private final CancellationSignalService cancellationSignalService;
     private final PlatformTransactionManager transactionManager;
+    private final JobServiceMetrics metrics;
 
     @Override
     @Transactional
@@ -65,7 +67,9 @@ public class JobService implements JobServiceInterface {
         job.setMaxRetries(request.maxRetries() == null ? DEFAULT_MAX_RETRIES : request.maxRetries());
         job.setNextRunAt(calculateNextRunAt(job.getScheduleType(), job.getScheduledTime(), job.getCronExpression()));
 
-        return jobMapper.toResponse(jobRepository.save(job));
+        Job saved = jobRepository.save(job);
+        metrics.jobCreated(saved.getScheduleType());
+        return jobMapper.toResponse(saved);
     }
 
     @Override
@@ -91,6 +95,7 @@ public class JobService implements JobServiceInterface {
         job.setMaxRetries(request.maxRetries() == null ? DEFAULT_MAX_RETRIES : request.maxRetries());
         job.setNextRunAt(calculateNextRunAt(job.getScheduleType(), job.getScheduledTime(), job.getCronExpression()));
 
+        metrics.jobUpdated(job.getScheduleType());
         return jobMapper.toResponse(job);
     }
 
@@ -108,6 +113,7 @@ public class JobService implements JobServiceInterface {
         Job job = findOwnedJob(jobId, userId);
         job.setStatus(JobStatus.CANCELLED);
         job.setNextRunAt(null);
+        metrics.jobCancelled();
         // Job cancellation prevents future scheduling only. Already queued or running
         // JobRuns are handled by the execution pipeline in a later phase.
         return new JobStatusResponse(job.getId(), job.getStatus());
@@ -120,6 +126,7 @@ public class JobService implements JobServiceInterface {
             cancellationSignalService.createSignal(runId, userId);
             log.info("Running cancellation signal created: runId={}, executorId={}", runId, decision.executorId());
         }
+        metrics.jobRunCancellationRequested(decision.status());
         log.info("Cancellation requested: jobId={}, runId={}, status={}, executorId={}", jobId, runId, decision.status(), decision.executorId());
         return new JobRunStatusResponse(jobId, runId, decision.status());
     }
@@ -131,6 +138,7 @@ public class JobService implements JobServiceInterface {
         ensureModifiable(job);
         if (job.getStatus() == JobStatus.ACTIVE) {
             job.setStatus(JobStatus.PAUSED);
+            metrics.jobPaused();
         }
         return new JobStatusResponse(job.getId(), job.getStatus());
     }
@@ -145,6 +153,7 @@ public class JobService implements JobServiceInterface {
                 job.setNextRunAt(nextCronRunAfter(job.getCronExpression(), LocalDateTime.now(clock)));
             }
             job.setStatus(JobStatus.ACTIVE);
+            metrics.jobResumed();
         }
         return new JobStatusResponse(job.getId(), job.getStatus());
     }

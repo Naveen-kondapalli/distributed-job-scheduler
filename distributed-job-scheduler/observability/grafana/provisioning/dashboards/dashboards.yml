@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: Distributed Job Scheduler
+    orgId: 1
+    folder: Distributed Job Scheduler
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

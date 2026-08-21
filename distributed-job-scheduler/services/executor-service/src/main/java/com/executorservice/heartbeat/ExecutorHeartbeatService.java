@@ -1,8 +1,7 @@
 package com.executorservice.heartbeat;
 
 import com.executorservice.config.ExecutorProperties;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
+import com.executorservice.observability.ExecutorMetrics;
 import jakarta.annotation.PreDestroy;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -60,8 +59,7 @@ public class ExecutorHeartbeatService implements ApplicationListener<Application
     private final LocalDateTime startedAt;
     private final String hostname;
     private final String instanceToken = UUID.randomUUID().toString();
-    private final Counter successCounter;
-    private final Counter failureCounter;
+    private final ExecutorMetrics metrics;
     private final AtomicBoolean registered = new AtomicBoolean(false);
 
     public ExecutorHeartbeatService(
@@ -73,7 +71,7 @@ public class ExecutorHeartbeatService implements ApplicationListener<Application
             String executorInstanceId,
             @Value("${spring.application.name:executor-service}") String serviceName,
             java.util.Optional<BuildProperties> buildProperties,
-            MeterRegistry meterRegistry
+            ExecutorMetrics metrics
     ) {
         this.redisTemplate = redisTemplate;
         this.keys = keys;
@@ -85,8 +83,7 @@ public class ExecutorHeartbeatService implements ApplicationListener<Application
         this.applicationVersion = buildProperties.map(BuildProperties::getVersion).orElse("unknown");
         this.startedAt = LocalDateTime.now(clock);
         this.hostname = hostname();
-        this.successCounter = meterRegistry.counter("executor.heartbeat.success");
-        this.failureCounter = meterRegistry.counter("executor.heartbeat.failure");
+        this.metrics = metrics;
     }
 
     @Override
@@ -109,7 +106,7 @@ public class ExecutorHeartbeatService implements ApplicationListener<Application
                     instanceToken
             );
             if (result != null && result == 1L) {
-                successCounter.increment();
+                metrics.heartbeat("success");
                 if (registered.compareAndSet(false, true)) {
                     log.info("Executor heartbeat registered: executorId={}", executorInstanceId);
                 } else {
@@ -118,21 +115,21 @@ public class ExecutorHeartbeatService implements ApplicationListener<Application
                 return true;
             }
             if (result != null && result == -1L) {
-                failureCounter.increment();
+                metrics.heartbeat("failure");
                 throw new DuplicateExecutorInstanceException("Active heartbeat already exists for executorId=" + executorInstanceId);
             }
-            failureCounter.increment();
+            metrics.heartbeat("failure");
             log.warn("Executor heartbeat update failed: executorId={}, reason={}", executorInstanceId, "identity claim was not applied");
             return false;
         } catch (DuplicateExecutorInstanceException ex) {
             log.error("Duplicate Executor instance ID detected: executorId={}, reason={}", executorInstanceId, ex.getMessage());
             throw ex;
         } catch (DataAccessException ex) {
-            failureCounter.increment();
+            metrics.heartbeat("failure");
             log.warn("Executor heartbeat update failed: executorId={}, reason={}", executorInstanceId, ex.getMessage());
             return false;
         } catch (Exception ex) {
-            failureCounter.increment();
+            metrics.heartbeat("failure");
             log.warn("Executor heartbeat update failed: executorId={}, reason={}", executorInstanceId, ex.getMessage(), ex);
             return false;
         }
