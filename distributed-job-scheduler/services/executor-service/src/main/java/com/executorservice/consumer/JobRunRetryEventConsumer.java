@@ -5,6 +5,7 @@ import com.executorservice.service.JobExecutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.slf4j.MDC;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -41,6 +42,7 @@ public class JobRunRetryEventConsumer {
         }
 
         try {
+            putMdc(event.eventId(), event.jobId(), event.runId(), event.retryCount());
             JobExecutionService.ProcessingDecision decision = jobExecutionService.processRetry(event);
             if (decision.acknowledge()) {
                 acknowledgment.acknowledge();
@@ -55,6 +57,23 @@ public class JobRunRetryEventConsumer {
                     ex.getMessage(),
                     ex
             );
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    private void putMdc(String eventId, Long jobId, Long runId, Integer retryCount) {
+        if (eventId != null) {
+            MDC.put("eventId", eventId);
+        }
+        if (jobId != null) {
+            MDC.put("jobId", String.valueOf(jobId));
+        }
+        if (runId != null) {
+            MDC.put("runId", String.valueOf(runId));
+        }
+        if (retryCount != null) {
+            MDC.put("retryCount", String.valueOf(retryCount));
         }
     }
 }

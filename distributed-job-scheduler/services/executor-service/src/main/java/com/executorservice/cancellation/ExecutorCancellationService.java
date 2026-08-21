@@ -2,6 +2,7 @@ package com.executorservice.cancellation;
 
 import com.executorservice.enums.JobRunStatus;
 import com.executorservice.heartbeat.ExecutorHeartbeatKeys;
+import com.executorservice.observability.ExecutorMetrics;
 import com.executorservice.repository.JobRunRepository;
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -23,6 +24,7 @@ public class ExecutorCancellationService {
     private final ExecutorHeartbeatKeys heartbeatKeys;
     private final String executorInstanceId;
     private final Clock clock;
+    private final ExecutorMetrics metrics;
 
     @Transactional
     public boolean completeIfCancellationRequested(Long runId) {
@@ -39,6 +41,7 @@ public class ExecutorCancellationService {
         );
         if (updated == 1) {
             deleteSignal(runId);
+            metrics.cancellationCompleted();
             log.info("Running execution cancelled: runId={}, executorId={}", runId, executorInstanceId);
             return true;
         }
@@ -51,6 +54,7 @@ public class ExecutorCancellationService {
         try {
             return Boolean.TRUE.equals(redisTemplate.hasKey(keys.key(runId)));
         } catch (Exception ex) {
+            metrics.cancellationSignalFailure();
             log.warn("Cancellation signal lookup failed: runId={}, reason={}", runId, ex.getMessage());
             return false;
         }
@@ -114,6 +118,7 @@ public class ExecutorCancellationService {
         try {
             redisTemplate.delete(keys.key(runId));
         } catch (Exception ex) {
+            metrics.cancellationSignalFailure();
             log.warn("Cancellation signal cleanup failed: runId={}, reason={}", runId, ex.getMessage());
         }
     }

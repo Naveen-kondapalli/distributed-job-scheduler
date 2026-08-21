@@ -1,12 +1,14 @@
 package com.watcherservice.service;
 
 import com.watcherservice.entity.OutboxEventEntity;
+import com.watcherservice.observability.WatcherMetrics;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,6 +25,7 @@ public class OutboxPublisherService {
     private final OutboxEventStateService outboxEventStateService;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final WatcherMetrics metrics;
 
     @Value("${outbox.publisher.batch-size:100}")
     private int batchSize;
@@ -53,6 +56,8 @@ public class OutboxPublisherService {
     }
 
     private void publishOne(OutboxEventEntity event) {
+        long started = metrics.outboxPublishStarted();
+        putMdc(event);
         try {
             validatePayload(event);
             ProducerRecord<String, String> record = new ProducerRecord<>(
@@ -67,6 +72,8 @@ public class OutboxPublisherService {
             SendResult<String, String> result = kafkaTemplate.send(record)
                     .get(sendTimeoutMs, TimeUnit.MILLISECONDS);
             outboxEventStateService.markPublished(event.getId());
+            metrics.outboxPublish(event.getTopic(), "success");
+            metrics.outboxPublishDuration(event.getTopic(), started);
 
             log.info(
                     "Outbox event published: eventId={}, runId={}, topic={}, partition={}, offset={}",
@@ -84,6 +91,8 @@ public class OutboxPublisherService {
                     maxDelayMs,
                     maxAttempts
             );
+            metrics.outboxPublish(event.getTopic(), "failure");
+            metrics.outboxPublishDuration(event.getTopic(), started);
             log.warn(
                     "Outbox publish failed: eventId={}, attempt={}, nextAttemptAt={}",
                     event.getEventId(),
@@ -91,6 +100,17 @@ public class OutboxPublisherService {
                     updated.getNextAttemptAt(),
                     ex
             );
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    private void putMdc(OutboxEventEntity event) {
+        if (event.getEventId() != null) {
+            MDC.put("eventId", event.getEventId());
+        }
+        if (event.getAggregateId() != null) {
+            MDC.put("runId", String.valueOf(event.getAggregateId()));
         }
     }
 
