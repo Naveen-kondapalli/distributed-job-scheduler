@@ -5,7 +5,7 @@
   "graphTooltip": 0,
   "links": [],
   "panels": [
-    {"type": "stat", "title": "Service health", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "up{job=~\"job-service|watcher-service|executor-service\"}", "legendFormat": "{{job}} {{instance}}"}]},
+    {"type": "stat", "title": "Service health", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "up{job=~\"api-gateway|job-service|watcher-service|executor-service\"}", "legendFormat": "{{job}} {{instance}}"}]},
     {"type": "timeseries", "title": "Job creation rate", "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "sum by (schedule_type) (rate(scheduler_jobs_created_total[5m]))", "legendFormat": "{{schedule_type}}"}]},
     {"type": "timeseries", "title": "Watcher claimed jobs rate", "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "sum by (schedule_type) (rate(scheduler_watcher_jobs_claimed_total[5m]))", "legendFormat": "{{schedule_type}}"}]},
     {"type": "timeseries", "title": "Outbox backlog", "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "sum by (status) (scheduler_outbox_events{status=~\"PENDING|PROCESSING|FAILED\"})", "legendFormat": "{{status}}"}]},
@@ -20,7 +20,11 @@
     {"type": "timeseries", "title": "Heartbeat failures", "gridPos": {"x": 0, "y": 12, "w": 6, "h": 4}, "targets": [{"expr": "sum(rate(scheduler_executor_heartbeat_total{result=\"failure\"}[5m]))", "legendFormat": "failure"}]},
     {"type": "timeseries", "title": "JVM memory used", "gridPos": {"x": 6, "y": 12, "w": 6, "h": 4}, "targets": [{"expr": "sum by (job) (jvm_memory_used_bytes{area=\"heap\"})", "legendFormat": "{{job}} heap"}]},
     {"type": "timeseries", "title": "HTTP request rate", "gridPos": {"x": 12, "y": 12, "w": 6, "h": 4}, "targets": [{"expr": "sum by (job) (rate(http_server_requests_seconds_count[5m]))", "legendFormat": "{{job}}"}]},
-    {"type": "timeseries", "title": "Duplicate Kafka events", "gridPos": {"x": 18, "y": 12, "w": 6, "h": 4}, "targets": [{"expr": "sum by (topic) (rate(scheduler_executor_kafka_duplicate_total[5m]))", "legendFormat": "{{topic}}"}]}
+    {"type": "timeseries", "title": "Duplicate Kafka events", "gridPos": {"x": 18, "y": 12, "w": 6, "h": 4}, "targets": [{"expr": "sum by (topic) (rate(scheduler_executor_kafka_duplicate_total[5m]))", "legendFormat": "{{topic}}"}]},
+    {"type": "timeseries", "title": "Gateway request rate", "gridPos": {"x": 0, "y": 16, "w": 6, "h": 4}, "targets": [{"expr": "sum by (route) (rate(scheduler_gateway_requests_total[5m]))", "legendFormat": "{{route}}"}]},
+    {"type": "timeseries", "title": "Gateway error rate", "gridPos": {"x": 6, "y": 16, "w": 6, "h": 4}, "targets": [{"expr": "sum by (result) (rate(scheduler_gateway_requests_total{result=~\"unauthorized|upstream_error|rate_limit_unavailable\"}[5m]))", "legendFormat": "{{result}}"}]},
+    {"type": "timeseries", "title": "Gateway rate-limited requests", "gridPos": {"x": 12, "y": 16, "w": 6, "h": 4}, "targets": [{"expr": "sum by (route) (rate(scheduler_gateway_rate_limited_total[5m]))", "legendFormat": "{{route}}"}]},
+    {"type": "timeseries", "title": "Gateway duration avg", "gridPos": {"x": 18, "y": 16, "w": 6, "h": 4}, "targets": [{"expr": "sum by (route) (rate(scheduler_gateway_request_duration_seconds_sum[5m])) / sum by (route) (rate(scheduler_gateway_request_duration_seconds_count[5m]))", "legendFormat": "{{route}} avg"}]}
   ],
   "refresh": "15s",
   "schemaVersion": 39,
