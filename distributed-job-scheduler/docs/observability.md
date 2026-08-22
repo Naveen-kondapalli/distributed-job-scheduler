@@ -1,6 +1,6 @@
 # Production-grade observability
 
-Applications expose `/actuator/prometheus`; Prometheus scrapes those endpoints; Grafana queries Prometheus. Logs remain application console output with correlation identifiers.
+Applications, including the API Gateway, expose `/actuator/prometheus`; Prometheus scrapes those endpoints; Grafana queries Prometheus. Logs remain application console output with correlation identifiers.
 
 ```text
 Applications
@@ -18,8 +18,9 @@ Local URLs:
 - Job Service: `http://localhost:8080/actuator/prometheus`
 - Watcher Service: `http://localhost:8081/actuator/prometheus`
 - Executor Service: `http://localhost:8082/actuator/prometheus`
+- API Gateway: `http://localhost:8085/actuator/prometheus`
 
-Custom metrics use bounded tags only: `schedule_type`, `resulting_status`, `topic`, `result`, `status`, `job_type`, `outcome`, and `failure_category`. Metrics do not use `jobId`, `runId`, `eventId`, `executorId`, URL, user ID, email, cron expression, payload, error message, or exception message as tags.
+Custom metrics use bounded tags only: `schedule_type`, `resulting_status`, `topic`, `result`, `status`, `job_type`, `outcome`, `failure_category`, and `route`. Metrics do not use `jobId`, `runId`, `eventId`, `executorId`, URL, user ID, email, cron expression, payload, error message, correlation ID, or exception message as tags.
 
 Prometheus:
 
@@ -27,7 +28,7 @@ Prometheus:
 - Port: `9090`
 - Config: `observability/prometheus/prometheus.yml`
 - Scrape interval: `15s`
-- Targets: `host.docker.internal:8080`, `:8081`, `:8082`
+- Targets: `host.docker.internal:8085`, `:8080`, `:8081`, `:8082`
 
 Grafana:
 
@@ -63,8 +64,11 @@ Key metrics:
 | executor-service | `scheduler.executor.cancellation.signal.failure` | counter | none |
 | executor-service | `scheduler.executor.heartbeat` | counter | `result` |
 | executor-service | `scheduler.executor.kafka.duplicate` | counter | `topic` |
+| api-gateway | `scheduler.gateway.requests` | counter | `route`, `result` |
+| api-gateway | `scheduler.gateway.request.duration` | timer | `route`, `result` |
+| api-gateway | `scheduler.gateway.rate_limited` | counter | `route` |
 
-MDC fields in the console pattern are `jobId`, `runId`, `eventId`, `executorId`, and `retryCount`. MDC is applied and cleared around watcher claims, watcher outbox publication, and executor Kafka consumers.
+MDC fields in the console pattern are `correlationId`, `jobId`, `runId`, `eventId`, `executorId`, and `retryCount`. MDC is applied and cleared around API Gateway requests, Job Service HTTP requests, watcher claims, watcher outbox publication, and executor Kafka consumers.
 
 Start local monitoring:
 
@@ -82,12 +86,15 @@ Invoke-WebRequest http://localhost:3000/api/health
 Invoke-WebRequest http://localhost:8080/actuator/prometheus | Select-Object -ExpandProperty Content
 Invoke-WebRequest http://localhost:8081/actuator/prometheus | Select-Object -ExpandProperty Content
 Invoke-WebRequest http://localhost:8082/actuator/prometheus | Select-Object -ExpandProperty Content
+Invoke-WebRequest http://localhost:8085/actuator/prometheus | Select-Object -ExpandProperty Content
 ```
 
 Useful PromQL:
 
 ```promql
-up{job=~"job-service|watcher-service|executor-service"}
+up{job=~"api-gateway|job-service|watcher-service|executor-service"}
+sum by (route) (rate(scheduler_gateway_requests_total[5m]))
+sum by (route) (rate(scheduler_gateway_rate_limited_total[5m]))
 sum by (schedule_type) (rate(scheduler_jobs_created_total[5m]))
 sum by (schedule_type) (rate(scheduler_watcher_jobs_claimed_total[5m]))
 sum by (status) (scheduler_outbox_events{status=~"PENDING|PROCESSING|FAILED"})
@@ -115,4 +122,4 @@ Troubleshooting DOWN targets:
 
 Production security: `/actuator/prometheus` can reveal operational data and should be restricted to internal monitoring networks or authenticated paths. Metrics and logs added in this phase do not include secrets, payloads, authorization headers, JWTs, Redis ownership tokens, or database/Kafka credentials.
 
-Prometheus and Grafana are monitoring systems only. Their outage has zero effect on scheduler durability or execution. OpenTelemetry, tracing, Loki/ELK, Alertmanager, Eureka, API Gateway, Kubernetes, frontend, and business notifications are intentionally deferred.
+Prometheus and Grafana are monitoring systems only. Their outage has zero effect on scheduler durability or execution. OpenTelemetry, distributed tracing, Loki/ELK, Alertmanager, Eureka, Kubernetes, frontend, and business notifications are intentionally deferred.

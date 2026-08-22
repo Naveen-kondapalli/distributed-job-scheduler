@@ -1,0 +1,59 @@
+spring:
+  application:
+    name: api-gateway
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  cloud:
+    gateway:
+      server:
+        webflux:
+          httpclient:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:3000}
+            response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:10s}
+
+server:
+  port: ${SERVER_PORT:8085}
+
+security:
+  jwt:
+    secret: ${JWT_SECRET:change-this-development-secret-key-minimum-32-characters}
+
+gateway:
+  services:
+    job-service-url: ${JOB_SERVICE_URL:http://localhost:8080}
+  max-request-size: ${GATEWAY_MAX_REQUEST_SIZE:1MB}
+  response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:10s}
+  rate-limit:
+    auth:
+      replenish-rate: ${GATEWAY_AUTH_REPLENISH_RATE:5}
+      burst-capacity: ${GATEWAY_AUTH_BURST_CAPACITY:10}
+    authenticated:
+      replenish-rate: ${GATEWAY_AUTHENTICATED_REPLENISH_RATE:20}
+      burst-capacity: ${GATEWAY_AUTHENTICATED_BURST_CAPACITY:40}
+
+management:
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    prometheus:
+      access: unrestricted
+    health:
+      show-details: always
+      probes:
+        enabled: true
+
+logging:
+  level:
+    root: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] %logger{36} correlationId=%X{correlationId:-} route=%X{route:-} - %msg%n"
