@@ -1,4 +1,122 @@
 services:
+  api-gateway:
+    image: distributed-job-scheduler-api-gateway:dev
+    build:
+      context: ./services/api-gateway
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: 8085
+      JOB_SERVICE_URL: http://job-service:8080
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-change-this-development-secret-key-minimum-32-characters}
+      GATEWAY_CONNECT_TIMEOUT_MS: ${GATEWAY_CONNECT_TIMEOUT_MS:-3000}
+      GATEWAY_RESPONSE_TIMEOUT: ${GATEWAY_RESPONSE_TIMEOUT:-10s}
+      GATEWAY_MAX_REQUEST_SIZE: ${GATEWAY_MAX_REQUEST_SIZE:-1MB}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Duser.timezone=Asia/Kolkata}
+    ports:
+      - "8085:8085"
+    depends_on:
+      redis:
+        condition: service_healthy
+      job-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8085; printf \"GET /actuator/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; grep -q \"\\\"status\\\":\\\"UP\\\"\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  job-service:
+    image: distributed-job-scheduler-job-service:dev
+    build:
+      context: ./services/job-service
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: 8080
+      DB_URL: jdbc:postgresql://postgres:5432/job_scheduler
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-change-this-development-secret-key-minimum-32-characters}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Duser.timezone=Asia/Kolkata}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET /actuator/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; grep -q \"\\\"status\\\":\\\"UP\\\"\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  watcher-service:
+    image: distributed-job-scheduler-watcher-service:dev
+    build:
+      context: ./services/watcher-service
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: 8081
+      DB_URL: jdbc:postgresql://postgres:5432/job_scheduler
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: job-scheduler-kafka:29092
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Duser.timezone=Asia/Kolkata}
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8081; printf \"GET /actuator/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; grep -q \"\\\"status\\\":\\\"UP\\\"\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  executor-service:
+    image: distributed-job-scheduler-executor-service:dev
+    build:
+      context: ./services/executor-service
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: 8082
+      DB_URL: jdbc:postgresql://postgres:5432/job_scheduler
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: job-scheduler-kafka:29092
+      EXECUTOR_HTTP_ALLOWED_HOSTS: ${EXECUTOR_HTTP_ALLOWED_HOSTS:-jsonplaceholder.typicode.com}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Duser.timezone=Asia/Kolkata}
+    expose:
+      - "8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8082; printf \"GET /actuator/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; grep -q \"\\\"status\\\":\\\"UP\\\"\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
   postgres:
     image: postgres:16
     container_name: job-scheduler-postgres
@@ -68,13 +186,22 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    command: >
-      bash -c "kafka-topics --bootstrap-server job-scheduler-kafka:29092
-      --create --if-not-exists --topic run --partitions 3 --replication-factor 1 &&
-      kafka-topics --bootstrap-server job-scheduler-kafka:29092
-      --create --if-not-exists --topic retry --partitions 3 --replication-factor 1 &&
-      kafka-topics --bootstrap-server job-scheduler-kafka:29092
-      --create --if-not-exists --topic dead --partitions 1 --replication-factor 1"
+    command:
+      - bash
+      - -ec
+      - |
+        ensure_topic() {
+          topic="$$1"
+          partitions="$$2"
+          kafka-topics --bootstrap-server job-scheduler-kafka:29092 --create --if-not-exists --topic "$$topic" --partitions "$$partitions" --replication-factor 1
+          current=$$(kafka-topics --bootstrap-server job-scheduler-kafka:29092 --describe --topic "$$topic" | awk -F"PartitionCount: " "/Topic: $$topic/{split(\$$2,a,\" \"); print a[1]; exit}")
+          if [ "$$current" -lt "$$partitions" ]; then
+            kafka-topics --bootstrap-server job-scheduler-kafka:29092 --alter --topic "$$topic" --partitions "$$partitions"
+          fi
+        }
+        ensure_topic run 3
+        ensure_topic retry 3
+        ensure_topic dead 1
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -118,7 +245,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
-
 
 volumes:
   postgres_data:

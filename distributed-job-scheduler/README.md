@@ -3,6 +3,23 @@
 ## Project documentation
 
 - [Production-grade observability](docs/observability.md)
+- [API Gateway external boundary](docs/api-gateway.md)
+- [Full Docker Compose containerization](docs/containerization.md)
+
+## Docker Compose quick start
+
+```powershell
+docker compose up -d --build
+docker compose ps
+```
+
+Use the API Gateway for client traffic:
+
+```text
+http://localhost:8085
+```
+
+Safe development defaults are provided in Compose. Copy `.env.example` to `.env` only when you need local overrides; do not commit real secrets.
 
 
 
