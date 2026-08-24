@@ -1,0 +1,483 @@
+name: CI
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: "17"
+  MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end"
+  JAVA_TOOL_OPTIONS: "-Duser.timezone=Asia/Kolkata"
+  CI_TEST_JWT_SECRET: "ci-test-jwt-secret-minimum-32-characters-only"
+  JWT_SECRET: "ci-test-jwt-secret-minimum-32-characters-only"
+  POSTGRES_DB: "job_scheduler"
+  POSTGRES_USER: "postgres"
+  POSTGRES_PASSWORD: "postgres"
+  DB_URL: "jdbc:postgresql://localhost:5432/job_scheduler"
+  DB_USERNAME: "postgres"
+  DB_PASSWORD: "postgres"
+  REDIS_HOST: "localhost"
+  REDIS_PORT: "6379"
+  KAFKA_BOOTSTRAP_SERVERS: "localhost:29092"
+
+jobs:
+  test-api-gateway:
+    name: Test API Gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7.2
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          cache-dependency-path: services/api-gateway/pom.xml
+      - name: Test
+        run: |
+          chmod +x ./mvnw
+          ./mvnw $MAVEN_CLI_OPTS test
+        working-directory: services/api-gateway
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-surefire-reports
+          path: services/api-gateway/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  test-job-service:
+    name: Test Job Service
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: job_scheduler
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d job_scheduler"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.2
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          cache-dependency-path: services/job-service/pom.xml
+      - name: Test
+        run: |
+          chmod +x ./mvnw
+          ./mvnw $MAVEN_CLI_OPTS test
+        working-directory: services/job-service
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-service-surefire-reports
+          path: services/job-service/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  test-watcher-service:
+    name: Test Watcher Service
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: job_scheduler
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d job_scheduler"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.2
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      kafka:
+        image: confluentinc/cp-kafka:7.6.1
+        env:
+          CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+          KAFKA_NODE_ID: "1"
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:29092
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+        ports:
+          - "29092:29092"
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:29092 --list >/dev/null 2>&1"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 10
+          --health-start-period 30s
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          cache-dependency-path: services/watcher-service/pom.xml
+      - name: Test
+        run: |
+          chmod +x ./mvnw
+          ./mvnw $MAVEN_CLI_OPTS test
+        working-directory: services/watcher-service
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watcher-service-surefire-reports
+          path: services/watcher-service/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  test-executor-service:
+    name: Test Executor Service
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_KAFKA_LISTENER_AUTO_STARTUP: "false"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: job_scheduler
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d job_scheduler"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.2
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      kafka:
+        image: confluentinc/cp-kafka:7.6.1
+        env:
+          CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+          KAFKA_NODE_ID: "1"
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:29092
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+        ports:
+          - "29092:29092"
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:29092 --list >/dev/null 2>&1"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 10
+          --health-start-period 30s
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          cache-dependency-path: services/executor-service/pom.xml
+      - name: Test
+        run: |
+          chmod +x ./mvnw
+          ./mvnw $MAVEN_CLI_OPTS test
+        working-directory: services/executor-service
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: executor-service-surefire-reports
+          path: services/executor-service/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build-jars:
+    name: Build JAR - ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs:
+      - test-api-gateway
+      - test-job-service
+      - test-watcher-service
+      - test-executor-service
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api-gateway
+            service-dir: services/api-gateway
+            artifact-name: api-gateway-jar
+          - name: job-service
+            service-dir: services/job-service
+            artifact-name: job-service-jar
+          - name: watcher-service
+            service-dir: services/watcher-service
+            artifact-name: watcher-service-jar
+          - name: executor-service
+            service-dir: services/executor-service
+            artifact-name: executor-service-jar
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          cache-dependency-path: ${{ matrix.service-dir }}/pom.xml
+      - name: Package
+        run: |
+          chmod +x ./mvnw
+          ./mvnw $MAVEN_CLI_OPTS -DskipTests package
+        working-directory: ${{ matrix.service-dir }}
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.service-dir }}/target/*.jar
+          if-no-files-found: error
+          retention-days: 7
+
+  validate-docker-compose:
+    name: Validate Docker Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify Docker availability
+        run: |
+          docker version
+          docker version --format '{{.Server.Version}}'
+          docker compose version
+      - name: Validate Compose config
+        run: docker compose config
+
+  build-docker-images:
+    name: Build Docker image - ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs:
+      - build-jars
+      - validate-docker-compose
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api-gateway
+            service-dir: services/api-gateway
+            image-name: distributed-job-scheduler-api-gateway:ci
+          - name: job-service
+            service-dir: services/job-service
+            image-name: distributed-job-scheduler-job-service:ci
+          - name: watcher-service
+            service-dir: services/watcher-service
+            image-name: distributed-job-scheduler-watcher-service:ci
+          - name: executor-service
+            service-dir: services/executor-service
+            image-name: distributed-job-scheduler-executor-service:ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify Docker availability
+        run: |
+          docker version
+          docker version --format '{{.Server.Version}}'
+      - name: Build image
+        run: docker build --pull -t "${{ matrix.image-name }}" "${{ matrix.service-dir }}"
+
+  compose-smoke:
+    name: Docker Compose smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs:
+      - build-docker-images
+      - validate-docker-compose
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Start stack
+        run: docker compose up -d --build
+      - name: Wait for healthy services
+        run: |
+          services="postgres kafka redis api-gateway job-service watcher-service executor-service prometheus grafana"
+          for service in $services; do
+            echo "Waiting for $service to become healthy"
+            deadline=$((SECONDS + 240))
+            while true; do
+              health=$(docker compose ps --format '{{.Health}}' "$service" 2>/dev/null || true)
+              status=$(docker compose ps --format '{{.State}}' "$service" 2>/dev/null || true)
+              if [ "$health" = "healthy" ]; then
+                echo "$service is healthy"
+                break
+              fi
+              if [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+                echo "$service stopped with state $status"
+                exit 1
+              fi
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "Timed out waiting for $service; status=$status health=$health"
+                exit 1
+              fi
+              sleep 5
+            done
+          done
+      - name: Verify exposed health endpoints
+        run: |
+          curl --fail --silent --show-error http://localhost:8085/actuator/health
+          curl --fail --silent --show-error http://localhost:8080/actuator/health
+          curl --fail --silent --show-error http://localhost:8081/actuator/health
+          curl --fail --silent --show-error http://localhost:9090/-/healthy
+          curl --fail --silent --show-error http://localhost:3000/api/health
+      - name: Compose diagnostics on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=200
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
+
+  security-secret-detection:
+    name: Secret detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run Gitleaks
+        run: docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.21.2 detect --source . --redact --no-banner --verbose
+
+  security-dependency-audit:
+    name: Dependency audit advisory
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    needs:
+      - test-api-gateway
+      - test-job-service
+      - test-watcher-service
+      - test-executor-service
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          cache-dependency-path: |
+            services/api-gateway/pom.xml
+            services/job-service/pom.xml
+            services/watcher-service/pom.xml
+            services/executor-service/pom.xml
+      - name: Run OWASP Dependency-Check
+        run: |
+          audit_failed=0
+          services="services/api-gateway services/job-service services/watcher-service services/executor-service"
+          for service in $services; do
+            chmod +x "$service/mvnw"
+            (
+              cd "$service"
+              ./mvnw $MAVEN_CLI_OPTS -DskipTests org.owasp:dependency-check-maven:12.1.3:check -DfailBuildOnCVSS=9 -Dformat=HTML -Dformat=JSON
+            ) || audit_failed=1
+          done
+          if [ "$audit_failed" -ne 0 ]; then
+            echo "Dependency audit reported critical findings or could not complete. See dependency-check artifacts. This job is advisory."
+            exit 1
+          fi
+      - name: Upload dependency reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-reports
+          path: services/*/target/dependency-check-report.*
+          if-no-files-found: ignore
+          retention-days: 7

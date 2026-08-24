@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: job-service
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/job_scheduler}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:admin}
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+
+server:
+  port: ${SERVER_PORT:8080}

@@ -203,6 +203,7 @@ services:
         ensure_topic retry 3
         ensure_topic dead 1
 
+
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: job-scheduler-prometheus

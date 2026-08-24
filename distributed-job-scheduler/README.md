@@ -5,6 +5,7 @@
 - [Production-grade observability](docs/observability.md)
 - [API Gateway external boundary](docs/api-gateway.md)
 - [Full Docker Compose containerization](docs/containerization.md)
+- [GitLab CI pipeline](docs/ci-cd.md)
 
 ## Docker Compose quick start
 
